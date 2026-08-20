@@ -1,0 +1,76 @@
+{
+  "name": "dsh-stcardwriter",
+  "version": "0.2.0",
+  "description": "DeepSeek Harness rc8 authoring mode for SillyTavern character cards, lorebooks, and presets.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./client": "./dist/client.js",
+    "./agent-tools": "./dist/agent-tools.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "agent-presets",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepare": "npm run build",
+    "test": "npm run build && node --test",
+    "check": "tsc --noEmit",
+    "pack:check": "npm pack --dry-run"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=0.1.0-rc.8",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.0-rc.8",
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.8",
+    "react": ">=18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/dsh-host-webserver": { "optional": true },
+    "@deepseek-ai/dsh-tools": { "optional": true },
+    "react": { "optional": true }
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "esbuild": "^0.25.0",
+    "fflate": "^0.8.2",
+    "react": "^19.1.1",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "sillytavern",
+    "character-card",
+    "lorebook",
+    "worldbook"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "license": "MIT"
+}
