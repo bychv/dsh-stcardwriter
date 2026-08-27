@@ -259,7 +259,7 @@ export function importArchive(filename: string, bytes: Uint8Array): { assets: Ta
   return { assets, errors }
 }
 
-function safeExportName(name: string): string {
+export function safeExportName(name: string): string {
   const safe = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').trim().replace(/[. ]+$/g, '')
   return safe || 'untitled'
 }

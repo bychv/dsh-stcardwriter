@@ -1,3 +1,8 @@
+// src/connector.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
+
 // src/format.ts
 import { createHash, randomUUID } from "node:crypto";
 
@@ -1839,11 +1844,267 @@ function decodeUtf8(bytes) {
   return strFromU8(bytes);
 }
 
+// src/connector.ts
+var REMOTE_CATEGORIES = [
+  { id: "characters", directory: "characters", kind: "character", extensions: [".png", ".json"] },
+  { id: "worlds", directory: "worlds", kind: "worldbook", extensions: [".json"] },
+  { id: "chat-completion", directory: "OpenAI Settings", kind: "preset", extensions: [".json"] },
+  { id: "textgen", directory: "TextGen Settings", kind: "preset", extensions: [".json"] },
+  { id: "context", directory: "context", kind: "preset", extensions: [".json"] },
+  { id: "instruct", directory: "instruct", kind: "preset", extensions: [".json"] },
+  { id: "sysprompt", directory: "sysprompt", kind: "preset", extensions: [".json"] }
+];
+var REMOTE_PRESET_CATEGORY_IDS = REMOTE_CATEGORIES.filter((category) => category.kind === "preset").map((category) => category.id);
+var PRESET_FORMAT_CATEGORY = {
+  "chat-completion-preset": "chat-completion",
+  "textgen-preset": "textgen",
+  "context-preset": "context",
+  "instruct-preset": "instruct",
+  "unknown-preset": "sysprompt"
+};
+function connectorConfigPath(storeRoot) {
+  return join(dirname(resolve(storeRoot)), "connector.json");
+}
+async function readConnectorConfig(storeRoot) {
+  try {
+    const parsed = JSON.parse(await readFile(connectorConfigPath(storeRoot), "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return void 0;
+    const config = parsed;
+    if (config.version !== 1 || typeof config.path !== "string" || typeof config.userDataRoot !== "string") return void 0;
+    return {
+      version: 1,
+      path: config.path,
+      userHandle: typeof config.userHandle === "string" ? config.userHandle : "",
+      userDataRoot: config.userDataRoot,
+      savedAt: typeof config.savedAt === "string" ? config.savedAt : ""
+    };
+  } catch {
+    return void 0;
+  }
+}
+async function writeConnectorConfig(storeRoot, config) {
+  const destination = connectorConfigPath(storeRoot);
+  await mkdir(dirname(destination), { recursive: true });
+  const temporary = join(dirname(destination), `.connector.${randomUUID2()}.tmp`);
+  await writeFile(temporary, `${JSON.stringify(config, null, 2)}
+`, { encoding: "utf8", flag: "wx" });
+  await rename(temporary, destination);
+}
+async function clearConnectorConfig(storeRoot) {
+  await rm(connectorConfigPath(storeRoot), { force: true });
+}
+async function requireConfig(storeRoot) {
+  const config = await readConnectorConfig(storeRoot);
+  if (!config) throw new Error("\u5C1A\u672A\u914D\u7F6E\u9152\u9986\u8FDE\u63A5\uFF1B\u8BF7\u5148\u5728\u8FDE\u63A5\u5668\u9762\u677F\u914D\u7F6E\u9152\u9986\u76EE\u5F55\uFF0C\u6216\u4F7F\u7528 tavern_connect_configure");
+  return config;
+}
+async function isDirectory(path) {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+async function fileExists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function readdirFiles(directory, extensions) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  return entries.filter((entry) => entry.isFile() && extensions.some((ext) => entry.name.toLowerCase().endsWith(ext))).map((entry) => entry.name).sort((a, b) => a.localeCompare(b));
+}
+async function describeConnection(userDataRoot) {
+  const root = resolve(userDataRoot);
+  const categories = await Promise.all(REMOTE_CATEGORIES.map(async (category) => {
+    const directory = join(root, category.directory);
+    const exists2 = await isDirectory(directory);
+    return { id: category.id, directory: category.directory, kind: category.kind, exists: exists2, count: exists2 ? (await readdirFiles(directory, category.extensions)).length : 0 };
+  }));
+  return { userDataRoot: root, categories };
+}
+async function probePath(path) {
+  if (typeof path !== "string" || !path.trim()) {
+    return { path: String(path ?? ""), type: "unknown", message: "\u8BF7\u586B\u5199\u9152\u9986\u5B89\u88C5\u6839\u76EE\u5F55\u6216\u7528\u6237\u6570\u636E\u76EE\u5F55", userHandles: [] };
+  }
+  const target = resolve(path.trim());
+  if (await isDirectory(join(target, "characters"))) {
+    return { path, type: "user-data-root", message: "\u8BC6\u522B\u4E3A\u9152\u9986\u7528\u6237\u6570\u636E\u76EE\u5F55", userHandles: [], userHandle: "", status: await describeConnection(target) };
+  }
+  const dataBase = await isDirectory(join(target, "data")) ? join(target, "data") : target;
+  const handles = [];
+  if (await isDirectory(dataBase)) {
+    for (const entry of await readdir(dataBase, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith("_") || entry.name.startsWith(".")) continue;
+      if (await isDirectory(join(dataBase, entry.name, "characters"))) handles.push(entry.name);
+    }
+  }
+  if (handles.length) {
+    const userHandle = handles.includes("default-user") ? "default-user" : handles[0];
+    return {
+      path,
+      type: "install-root",
+      message: dataBase === target ? `\u8BC6\u522B\u4E3A\u9152\u9986\u7528\u6237\u76EE\u5F55\u96C6\u5408\uFF0C\u542B ${handles.length} \u4E2A\u7528\u6237` : `\u8BC6\u522B\u4E3A\u9152\u9986\u5B89\u88C5\u6839\u76EE\u5F55\uFF0Cdata/ \u4E0B\u6709 ${handles.length} \u4E2A\u7528\u6237`,
+      userHandles: handles,
+      userHandle,
+      status: await describeConnection(join(dataBase, userHandle))
+    };
+  }
+  return { path, type: "unknown", message: "\u76EE\u5F55\u4E0B\u6CA1\u6709 characters/\uFF0C\u4E5F\u6CA1\u6709 data/<\u7528\u6237>/characters\uFF1B\u8BF7\u786E\u8BA4\u8DEF\u5F84\u6307\u5411\u9152\u9986\u5B89\u88C5\u6839\u76EE\u5F55\u6216\u7528\u6237\u6570\u636E\u76EE\u5F55", userHandles: [] };
+}
+async function resolveUserDataRoot(path, handleOverride) {
+  const probe = await probePath(path);
+  if (probe.type === "unknown") throw new Error(probe.message);
+  if (probe.type === "user-data-root") return { type: probe.type, userDataRoot: resolve(path.trim()), userHandle: "" };
+  const target = resolve(path.trim());
+  const dataBase = await isDirectory(join(target, "data")) ? join(target, "data") : target;
+  const userHandle = handleOverride && probe.userHandles.includes(handleOverride) ? handleOverride : probe.userHandle;
+  return { type: probe.type, userDataRoot: join(dataBase, userHandle), userHandle };
+}
+async function saveConnector(storeRoot, path, userHandle) {
+  const resolved = await resolveUserDataRoot(path, userHandle?.trim() || void 0);
+  const config = {
+    version: 1,
+    path: path.trim(),
+    userHandle: resolved.userHandle,
+    userDataRoot: resolved.userDataRoot,
+    savedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await writeConnectorConfig(storeRoot, config);
+  return { config, status: await describeConnection(config.userDataRoot) };
+}
+async function listRemote(storeRoot, kind) {
+  const config = await requireConfig(storeRoot);
+  const entries = [];
+  for (const category of REMOTE_CATEGORIES) {
+    if (kind && category.kind !== kind) continue;
+    const directory = join(config.userDataRoot, category.directory);
+    if (!await isDirectory(directory)) continue;
+    for (const filename of await readdirFiles(directory, category.extensions)) {
+      const info = await stat(join(directory, filename));
+      entries.push({
+        category: category.id,
+        directory: category.directory,
+        kind: category.kind,
+        name: filename.replace(/\.[^.]+$/, ""),
+        file: `${category.directory}/${filename}`,
+        bytes: info.size,
+        modifiedAt: info.mtime.toISOString()
+      });
+    }
+  }
+  return entries.sort((a, b) => a.file.localeCompare(b.file));
+}
+function safeRemoteFile(userDataRoot, file2) {
+  const normalized = file2.replaceAll("\\", "/").replace(/^\/+/, "");
+  if (!normalized || normalized.split("/").some((part) => !part || part === "." || part === "..")) throw new Error(`\u975E\u6CD5\u7684\u9152\u9986\u6587\u4EF6\u8DEF\u5F84\uFF1A${file2}`);
+  const first = normalized.slice(0, normalized.indexOf("/"));
+  const category = REMOTE_CATEGORIES.find((value) => value.directory.toLowerCase() === first.toLowerCase());
+  if (!category) throw new Error(`\u4E0D\u652F\u6301\u7684\u9152\u9986\u76EE\u5F55\uFF1A${first}\uFF08\u652F\u6301 ${REMOTE_CATEGORIES.map((value) => value.directory).join("\u3001")}\uFF09`);
+  if (!category.extensions.some((ext) => normalized.toLowerCase().endsWith(ext))) throw new Error(`\u4E0D\u652F\u6301\u7684\u6587\u4EF6\u7C7B\u578B\uFF1A${normalized}`);
+  const absolute = resolve(userDataRoot, normalized);
+  const back = relative(resolve(userDataRoot), absolute);
+  if (!back || back.startsWith("..")) throw new Error(`\u6587\u4EF6\u8DEF\u5F84\u8D8A\u51FA\u9152\u9986\u6570\u636E\u76EE\u5F55\uFF1A${file2}`);
+  return { category, file: normalized, absolute };
+}
+var MAX_REMOTE_ITEMS = 500;
+async function importRemote(store, projectId, files, options = {}) {
+  if (!Array.isArray(files) || !files.length) throw new Error("files \u4E0D\u80FD\u4E3A\u7A7A");
+  if (files.length > MAX_REMOTE_ITEMS) throw new Error(`files \u6700\u591A\u5141\u8BB8 ${MAX_REMOTE_ITEMS} \u9879`);
+  const config = await requireConfig(store.root);
+  const replaceExisting = options.replaceExisting !== false;
+  const assets = [];
+  const errors = [];
+  for (const file2 of [...new Set(files)]) {
+    try {
+      const located = safeRemoteFile(config.userDataRoot, file2);
+      const bytes = await readFile(located.absolute);
+      const result = importArchive(located.file, bytes);
+      assets.push(...result.assets);
+      for (const error of result.errors) errors.push({ file: file2, error: `${error.filename}: ${error.error}` });
+    } catch (error) {
+      errors.push({ file: file2, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  let imported = 0;
+  let replaced = 0;
+  const project = await store.update(projectId, (value) => {
+    for (const asset of assets) {
+      const index = replaceExisting ? value.assets.findIndex((item) => item.source?.filename === asset.source?.filename) : -1;
+      if (index >= 0) {
+        const { id, createdAt } = value.assets[index];
+        value.assets[index] = { ...asset, id, createdAt };
+        replaced += 1;
+      } else {
+        value.assets.push(asset);
+        imported += 1;
+      }
+    }
+  });
+  return { project, imported, replaced, errors };
+}
+function remoteExportName(asset) {
+  const data = asset.kind === "character" ? characterData(asset.data) : asset.data;
+  return safeExportName(typeof data.name === "string" && data.name.trim() ? data.name : asset.name);
+}
+function categoryForAsset(asset, presetTarget) {
+  if (asset.kind === "character") return REMOTE_CATEGORIES[0];
+  if (asset.kind === "worldbook") return REMOTE_CATEGORIES[1];
+  const requested = presetTarget ? REMOTE_CATEGORIES.find((value) => value.id === presetTarget && value.kind === "preset") : void 0;
+  if (requested) return requested;
+  return REMOTE_CATEGORIES.find((value) => value.id === (PRESET_FORMAT_CATEGORY[asset.format] ?? "sysprompt"));
+}
+async function exportRemote(store, projectId, assetIds, options = {}) {
+  if (!Array.isArray(assetIds) || !assetIds.length) throw new Error("assetIds \u4E0D\u80FD\u4E3A\u7A7A");
+  if (assetIds.length > MAX_REMOTE_ITEMS) throw new Error(`assetIds \u6700\u591A\u5141\u8BB8 ${MAX_REMOTE_ITEMS} \u9879`);
+  const config = await requireConfig(store.root);
+  const conflict = options.conflict ?? "overwrite";
+  const project = await store.get(projectId);
+  const userDataRoot = resolve(config.userDataRoot);
+  const results = [];
+  for (const assetId of [...new Set(assetIds)]) {
+    const asset = project.assets.find((value) => value.id === assetId);
+    if (!asset) throw new Error(`\u627E\u4E0D\u5230\u8D44\u6E90\uFF1A${assetId}`);
+    const category = categoryForAsset(asset, options.presetTarget);
+    const directory = resolve(userDataRoot, category.directory);
+    const back = relative(userDataRoot, directory);
+    if (!back || back.startsWith("..")) throw new Error(`\u76EE\u6807\u76EE\u5F55\u8D8A\u51FA\u9152\u9986\u6570\u636E\u76EE\u5F55\uFF1A${category.directory}`);
+    const exported = exportAsset(asset, asset.kind === "character" ? "png" : "json");
+    const extension = exported.filename.slice(exported.filename.lastIndexOf("."));
+    const stem = remoteExportName(asset);
+    let filename = `${stem}${extension}`;
+    let status = "written";
+    if (await fileExists(join(directory, filename))) {
+      if (conflict === "skip") {
+        results.push({ assetId, name: asset.name, kind: asset.kind, category: category.id, directory: category.directory, file: `${category.directory}/${filename}`, status: "skipped" });
+        continue;
+      }
+      if (conflict === "rename") {
+        let index = 2;
+        while (await fileExists(join(directory, `${stem} (${index})${extension}`))) index += 1;
+        filename = `${stem} (${index})${extension}`;
+        status = "renamed";
+      } else {
+        status = "overwritten";
+      }
+    }
+    await mkdir(directory, { recursive: true });
+    const temporary = join(directory, `.${randomUUID2()}.tmp`);
+    await writeFile(temporary, exported.bytes, { flag: "wx" });
+    await rename(temporary, join(directory, filename));
+    results.push({ assetId, name: asset.name, kind: asset.kind, category: category.id, directory: category.directory, file: `${category.directory}/${filename}`, status });
+  }
+  return results;
+}
+
 // src/store.ts
-import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { createHash as createHash2, randomUUID as randomUUID3 } from "node:crypto";
+import { mkdir as mkdir2, readFile as readFile2, readdir as readdir2, rename as rename2, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname as dirname2, isAbsolute, join as join2, relative as relative2, resolve as resolve2, sep } from "node:path";
 var SAFE_ID = /^[a-zA-Z0-9-]{1,80}$/;
 function now() {
   return (/* @__PURE__ */ new Date()).toISOString();
@@ -1869,14 +2130,14 @@ function binaryDataUri(value) {
   }
 }
 function resolveDshHome() {
-  return process.env.DSH_HOME || join(homedir(), ".dsh");
+  return process.env.DSH_HOME || join2(homedir(), ".dsh");
 }
 function resolveDataRoot() {
-  return process.env.DSH_STCARDWRITER_DATA || join(resolveDshHome(), "st-card-writer", "projects");
+  return process.env.DSH_STCARDWRITER_DATA || join2(resolveDshHome(), "st-card-writer", "projects");
 }
 function resolveWorkspaceDataRoot(workspacePath) {
   if (!workspacePath || !isAbsolute(workspacePath)) throw new Error("\u9700\u8981\u6709\u6548\u7684 DSH \u5DE5\u4F5C\u533A\u7EDD\u5BF9\u8DEF\u5F84");
-  return join(resolve(workspacePath), ".tavernres", "projects");
+  return join2(resolve2(workspacePath), ".tavernres", "projects");
 }
 function assertId(id) {
   if (!SAFE_ID.test(id)) throw new Error("\u65E0\u6548 ID");
@@ -1894,33 +2155,33 @@ var ProjectStore = class {
     this.root = root;
   }
   async initialize() {
-    await mkdir(this.root, { recursive: true });
+    await mkdir2(this.root, { recursive: true });
   }
   path(id) {
     assertId(id);
-    return join(this.root, `${id}.json`);
+    return join2(this.root, `${id}.json`);
   }
   binaryDirectory(id) {
     assertId(id);
-    return join(this.root, `${id}.assets`);
+    return join2(this.root, `${id}.assets`);
   }
   referencedPath(file2) {
-    const root = resolve(this.root);
-    const destination = resolve(root, file2.replaceAll("/", sep));
-    const back = relative(root, destination);
+    const root = resolve2(this.root);
+    const destination = resolve2(root, file2.replaceAll("/", sep));
+    const back = relative2(root, destination);
     if (!back || back.startsWith("..") || isAbsolute(back)) throw new Error("\u9879\u76EE\u4E8C\u8FDB\u5236\u5F15\u7528\u8D8A\u51FA\u5B58\u50A8\u76EE\u5F55");
     return destination;
   }
   async writeBinary(file2, bytes) {
     const destination = this.referencedPath(file2);
-    await mkdir(dirname(destination), { recursive: true });
-    const temporary = `${destination}.${randomUUID2()}.tmp`;
-    await writeFile(temporary, bytes, { flag: "wx" });
-    await rename(temporary, destination);
+    await mkdir2(dirname2(destination), { recursive: true });
+    const temporary = `${destination}.${randomUUID3()}.tmp`;
+    await writeFile2(temporary, bytes, { flag: "wx" });
+    await rename2(temporary, destination);
     return { file: file2.replaceAll("\\", "/"), bytes: bytes.length, sha256: sha256(bytes) };
   }
   async readBinary(reference) {
-    const bytes = await readFile(this.referencedPath(reference.file));
+    const bytes = await readFile2(this.referencedPath(reference.file));
     if (bytes.length !== reference.bytes || sha256(bytes) !== reference.sha256) throw new Error(`\u9879\u76EE\u4E8C\u8FDB\u5236\u6587\u4EF6\u6821\u9A8C\u5931\u8D25\uFF1A${reference.file}`);
     return bytes;
   }
@@ -1995,10 +2256,10 @@ var ProjectStore = class {
   async persist(project) {
     const persisted = await this.prepareForPersistence(project);
     const destination = this.path(project.id);
-    const temporary = join(this.root, `.${project.id}.${randomUUID2()}.tmp`);
-    await writeFile(temporary, `${JSON.stringify(persisted, null, 2)}
+    const temporary = join2(this.root, `.${project.id}.${randomUUID3()}.tmp`);
+    await writeFile2(temporary, `${JSON.stringify(persisted, null, 2)}
 `, { encoding: "utf8", flag: "wx" });
-    await rename(temporary, destination);
+    await rename2(temporary, destination);
   }
   async serialize(id, task) {
     const prior = this.queues.get(id) ?? Promise.resolve();
@@ -2012,7 +2273,7 @@ var ProjectStore = class {
   }
   async list() {
     await this.initialize();
-    const names = await readdir(this.root);
+    const names = await readdir2(this.root);
     const projects = await Promise.all(names.filter((name) => SAFE_ID.test(name.replace(/\.json$/, "")) && name.endsWith(".json")).map(async (name) => {
       try {
         return await this.get(name.slice(0, -5));
@@ -2034,13 +2295,13 @@ var ProjectStore = class {
     })).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
   async get(id) {
-    const value = JSON.parse(await readFile(this.path(id), "utf8"));
+    const value = JSON.parse(await readFile2(this.path(id), "utf8"));
     validateProject(value);
     return this.hydrate(value);
   }
   async create(name = "\u672A\u547D\u540D\u9152\u9986\u9879\u76EE") {
     const timestamp = now();
-    const project = { id: randomUUID2(), name: name.trim() || "\u672A\u547D\u540D\u9152\u9986\u9879\u76EE", createdAt: timestamp, updatedAt: timestamp, assets: [] };
+    const project = { id: randomUUID3(), name: name.trim() || "\u672A\u547D\u540D\u9152\u9986\u9879\u76EE", createdAt: timestamp, updatedAt: timestamp, assets: [] };
     await this.write(project);
     return clone2(project);
   }
@@ -2067,8 +2328,8 @@ var ProjectStore = class {
   }
   async delete(id) {
     assertId(id);
-    await rm(this.path(id), { force: true });
-    await rm(this.binaryDirectory(id), { recursive: true, force: true });
+    await rm2(this.path(id), { force: true });
+    await rm2(this.binaryDirectory(id), { recursive: true, force: true });
   }
   async addBlankAsset(projectId, kind, name) {
     return this.update(projectId, (project) => {
@@ -2184,6 +2445,21 @@ function oneOfKind(value) {
   if (value === "character" || value === "worldbook" || value === "preset") return value;
   throw new HttpError(400, "kind \u5FC5\u987B\u662F character\u3001worldbook \u6216 preset");
 }
+function stringArray(value, label, max2 = 500) {
+  if (!Array.isArray(value) || !value.length || !value.every((item) => typeof item === "string" && item.trim())) throw new HttpError(400, `${label} \u5FC5\u987B\u662F\u975E\u7A7A\u5B57\u7B26\u4E32\u6570\u7EC4`);
+  if (value.length > max2) throw new HttpError(400, `${label} \u6700\u591A\u5141\u8BB8 ${max2} \u9879`);
+  return [...new Set(value)];
+}
+function conflictPolicy(value) {
+  if (value === void 0 || value === null || value === "") return "overwrite";
+  if (value === "overwrite" || value === "rename" || value === "skip") return value;
+  throw new HttpError(400, "conflict \u5FC5\u987B\u662F overwrite\u3001rename \u6216 skip");
+}
+function presetTargetCategory(value) {
+  if (value === void 0 || value === null || value === "") return void 0;
+  if (typeof value === "string" && REMOTE_PRESET_CATEGORY_IDS.includes(value)) return value;
+  throw new HttpError(400, `presetTarget \u5FC5\u987B\u662F ${REMOTE_PRESET_CATEGORY_IDS.join("\u3001")} \u4E4B\u4E00`);
+}
 function findAsset(project, id) {
   const asset = project.assets.find((value) => value.id === id);
   if (!asset) throw new HttpError(404, "\u627E\u4E0D\u5230\u8D44\u6E90");
@@ -2217,7 +2493,6 @@ function createWorkspaceStoreResolver() {
 function createApiHandler(storeOrResolver) {
   return async (req, res) => {
     try {
-      const store = typeof storeOrResolver === "function" ? storeOrResolver(req) : storeOrResolver;
       const method = req.method || "GET";
       const { parts, query } = relativePath(req);
       if (method === "OPTIONS") {
@@ -2225,11 +2500,57 @@ function createApiHandler(storeOrResolver) {
         res.end();
         return;
       }
+      const store = typeof storeOrResolver === "function" ? storeOrResolver(req) : storeOrResolver;
       if (parts.length === 1 && parts[0] === "projects") {
         if (method === "GET") return json(res, 200, { projects: await store.list() });
         if (method === "POST") {
           const body = await readJson(req);
           return json(res, 201, { project: await store.create(typeof body.name === "string" ? body.name : void 0) });
+        }
+      }
+      if (parts[0] === "connector") {
+        if (parts.length === 1 && method === "GET") {
+          const config = await readConnectorConfig(store.root);
+          if (!config) return json(res, 200, { connected: false });
+          return json(res, 200, { connected: true, config, status: await describeConnection(config.userDataRoot) });
+        }
+        if (parts.length === 1 && method === "PUT") {
+          const body = await readJson(req);
+          if (typeof body.path !== "string" || !body.path.trim()) throw new HttpError(400, "\u7F3A\u5C11\u9152\u9986\u76EE\u5F55\u8DEF\u5F84 path");
+          const probe = await probePath(body.path);
+          if (probe.type === "unknown") throw new HttpError(400, probe.message);
+          const userHandle = typeof body.userHandle === "string" && body.userHandle.trim() ? body.userHandle.trim() : void 0;
+          const saved = await saveConnector(store.root, body.path, userHandle);
+          return json(res, 200, { connected: true, config: saved.config, status: saved.status });
+        }
+        if (parts.length === 1 && method === "DELETE") {
+          await clearConnectorConfig(store.root);
+          return json(res, 200, { connected: false });
+        }
+        if (parts.length === 2 && parts[1] === "probe" && method === "POST") {
+          const body = await readJson(req);
+          if (typeof body.path !== "string" || !body.path.trim()) throw new HttpError(400, "\u7F3A\u5C11\u9152\u9986\u76EE\u5F55\u8DEF\u5F84 path");
+          return json(res, 200, { probe: await probePath(body.path) });
+        }
+        if (parts.length === 2 && parts[1] === "remote" && method === "GET") {
+          if (!await readConnectorConfig(store.root)) throw new HttpError(400, "\u5C1A\u672A\u914D\u7F6E\u9152\u9986\u8FDE\u63A5\uFF0C\u8BF7\u5148 PUT /connector");
+          const kindParam = query.get("kind");
+          return json(res, 200, { entries: await listRemote(store.root, kindParam ? oneOfKind(kindParam) : void 0) });
+        }
+        if (parts.length === 2 && parts[1] === "import" && method === "POST") {
+          if (!await readConnectorConfig(store.root)) throw new HttpError(400, "\u5C1A\u672A\u914D\u7F6E\u9152\u9986\u8FDE\u63A5\uFF0C\u8BF7\u5148 PUT /connector");
+          const body = await readJson(req);
+          if (typeof body.projectId !== "string" || !body.projectId.trim()) throw new HttpError(400, "\u7F3A\u5C11 projectId");
+          const files = stringArray(body.files, "files");
+          return json(res, 200, await importRemote(store, body.projectId, files, { replaceExisting: body.replaceExisting !== false }));
+        }
+        if (parts.length === 2 && parts[1] === "export" && method === "POST") {
+          if (!await readConnectorConfig(store.root)) throw new HttpError(400, "\u5C1A\u672A\u914D\u7F6E\u9152\u9986\u8FDE\u63A5\uFF0C\u8BF7\u5148 PUT /connector");
+          const body = await readJson(req);
+          if (typeof body.projectId !== "string" || !body.projectId.trim()) throw new HttpError(400, "\u7F3A\u5C11 projectId");
+          const assetIds = stringArray(body.assetIds, "assetIds");
+          const results = await exportRemote(store, body.projectId, assetIds, { conflict: conflictPolicy(body.conflict), presetTarget: presetTargetCategory(body.presetTarget) });
+          return json(res, 200, { results });
         }
       }
       if (parts[0] !== "projects" || !parts[1]) throw new HttpError(404, "\u63A5\u53E3\u4E0D\u5B58\u5728");
@@ -2300,42 +2621,69 @@ function createApiHandler(storeOrResolver) {
 }
 
 // src/preset.ts
-import { copyFile, mkdir as mkdir2, readFile as readFile2 } from "node:fs/promises";
-import { dirname as dirname2, join as join2 } from "node:path";
+import { copyFile, mkdir as mkdir3, readFile as readFile3, writeFile as writeFile3 } from "node:fs/promises";
+import { dirname as dirname3, join as join3 } from "node:path";
 import { fileURLToPath } from "node:url";
 async function exists(path) {
   try {
-    await readFile2(path);
+    await readFile3(path);
     return true;
   } catch {
     return false;
   }
 }
+var MANAGED_V2 = "# dsh-stcardwriter managed preset v2";
+var MANAGED_V3 = "# dsh-stcardwriter managed preset v3";
 async function ensureAgentPreset() {
-  const destination = join2(resolveDshHome(), ".agent-presets", "tavern-authoring");
-  const target = join2(destination, "agent.cordis.yml");
-  if (await exists(target)) return { installed: false, path: destination };
-  const packageRoot = dirname2(dirname2(fileURLToPath(import.meta.url)));
-  const source = join2(packageRoot, "agent-presets", "tavern-authoring");
-  await mkdir2(destination, { recursive: true });
+  const destination = join3(resolveDshHome(), ".agent-presets", "tavern-authoring");
+  const target = join3(destination, "agent.cordis.yml");
+  if (await exists(target)) {
+    const current = await readFile3(target, "utf8");
+    if (current.startsWith(MANAGED_V2) && current.includes("    complete: true")) {
+      const migrated = current.replace(MANAGED_V2, MANAGED_V3).replace("    complete: true", "    complete: false");
+      await writeFile3(target, migrated, "utf8");
+      return { installed: false, updated: true, path: destination };
+    }
+    return { installed: false, updated: false, path: destination };
+  }
+  const packageRoot = dirname3(dirname3(fileURLToPath(import.meta.url)));
+  const source = join3(packageRoot, "agent-presets", "tavern-authoring");
+  await mkdir3(destination, { recursive: true });
   await Promise.all([
-    copyFile(join2(source, "agent.cordis.yml"), target),
-    copyFile(join2(source, "preset.yml"), join2(destination, "preset.yml"))
+    copyFile(join3(source, "agent.cordis.yml"), target),
+    copyFile(join3(source, "preset.yml"), join3(destination, "preset.yml"))
   ]);
-  return { installed: true, path: destination };
+  return { installed: true, updated: false, path: destination };
 }
 
 // src/index.ts
 var inject = ["webServer"];
+var PRESET_PLUS_SCOPES = ["preset-plus", "tavern-authoring"];
+function filterPresetPlusSection(sections, presetId) {
+  return PRESET_PLUS_SCOPES.includes(presetId ?? "") ? sections : sections.filter((section) => section.name !== "preset-plus");
+}
+function installPresetPlusScopeGuard(ctx) {
+  const agentPresets = ctx.get?.("agentPresets");
+  if (!agentPresets || !ctx.on) return;
+  ctx.on("system-prompt/assemble", (assembly, context, next) => {
+    const presetId = context.agent ? agentPresets.composedPreset(context.agent.ctx) : void 0;
+    assembly.sections = filterPresetPlusSection(assembly.sections, presetId);
+    return next();
+  }, { global: true });
+}
 function apply(ctx) {
   void ensureAgentPreset().catch((error) => console.warn("[dsh-stcardwriter] Agent \u9884\u8BBE\u5B89\u88C5\u5931\u8D25:", error));
   const register = () => ctx.webServer.register({ kind: "prefix", path: API_PREFIX, handler: createApiHandler(createWorkspaceStoreResolver()) });
   if (ctx.effect) ctx.effect(register, "dsh-stcardwriter: api");
   else register();
+  installPresetPlusScopeGuard(ctx);
 }
 export {
   API_PREFIX,
+  PRESET_PLUS_SCOPES,
   ProjectStore,
+  REMOTE_CATEGORIES,
+  REMOTE_PRESET_CATEGORY_IDS,
   apply,
   assetForAgent,
   assetSummaryForAgent,
@@ -2343,6 +2691,8 @@ export {
   characterData,
   characterResourceSummary,
   characterVersion,
+  clearConnectorConfig,
+  connectorConfigPath,
   copyWorldbookEntries,
   createApiHandler,
   createAsset,
@@ -2351,26 +2701,35 @@ export {
   decodeText,
   decodeUtf8,
   deleteWorldbookEntry,
+  describeConnection,
   detectKind,
   embeddedPath,
   ensureAgentPreset,
   exportAsset,
   exportProject,
+  exportRemote,
+  filterPresetPlusSection,
   importArchive,
   importAsset,
+  importRemote,
   inject,
   isObject,
+  listRemote,
   makePlaceholderPng,
   migrateCharacterResources,
   normalizeResourcePath,
   orderedPresetPrompts,
   parsePngChunks,
   patchCharacterFields,
+  probePath,
   projectForAgent,
   projectManifestForAgent,
   readCharacterFromPng,
   readCharacterTextResource,
+  readConnectorConfig,
   readExtendedAssetsFromPng,
+  safeExportName,
+  saveConnector,
   selectedAssetFieldsForAgent,
   toCharacterV1,
   toCharacterV2,
@@ -2379,6 +2738,7 @@ export {
   upsertWorldbookEntry,
   workspacePathFromRequest,
   worldbookEntryRecords,
-  writeCharacterToPng
+  writeCharacterToPng,
+  writeConnectorConfig
 };
 //# sourceMappingURL=index.js.map

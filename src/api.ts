@@ -1,4 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import {
+  clearConnectorConfig, describeConnection, exportRemote, importRemote, listRemote, probePath,
+  readConnectorConfig, saveConnector, REMOTE_PRESET_CATEGORY_IDS,
+} from './connector.js'
+import type { RemoteConflictPolicy, RemoteCategoryId } from './connector.js'
 import { exportAsset, exportProject, isObject } from './format.js'
 import { ProjectStore, resolveWorkspaceDataRoot } from './store.js'
 import type { AssetKind, TavernAsset } from './types.js'
@@ -64,6 +69,24 @@ function oneOfKind(value: unknown): AssetKind {
   throw new HttpError(400, 'kind 必须是 character、worldbook 或 preset')
 }
 
+function stringArray(value: unknown, label: string, max = 500): string[] {
+  if (!Array.isArray(value) || !value.length || !value.every(item => typeof item === 'string' && item.trim())) throw new HttpError(400, `${label} 必须是非空字符串数组`)
+  if (value.length > max) throw new HttpError(400, `${label} 最多允许 ${max} 项`)
+  return [...new Set(value)]
+}
+
+function conflictPolicy(value: unknown): RemoteConflictPolicy {
+  if (value === undefined || value === null || value === '') return 'overwrite'
+  if (value === 'overwrite' || value === 'rename' || value === 'skip') return value
+  throw new HttpError(400, 'conflict 必须是 overwrite、rename 或 skip')
+}
+
+function presetTargetCategory(value: unknown): RemoteCategoryId | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  if (typeof value === 'string' && (REMOTE_PRESET_CATEGORY_IDS as readonly string[]).includes(value)) return value as RemoteCategoryId
+  throw new HttpError(400, `presetTarget 必须是 ${REMOTE_PRESET_CATEGORY_IDS.join('、')} 之一`)
+}
+
 function findAsset(project: { assets: TavernAsset[] }, id: string): TavernAsset {
   const asset = project.assets.find(value => value.id === id)
   if (!asset) throw new HttpError(404, '找不到资源')
@@ -93,17 +116,62 @@ export function createWorkspaceStoreResolver(): (req: IncomingMessage) => Projec
 export function createApiHandler(storeOrResolver: ProjectStore | ((req: IncomingMessage) => ProjectStore)) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
-      const store = typeof storeOrResolver === 'function' ? storeOrResolver(req) : storeOrResolver
       const method = req.method || 'GET'
       const { parts, query } = relativePath(req)
       if (method === 'OPTIONS') {
         res.writeHead(204, { allow: 'GET, POST, PUT, DELETE, OPTIONS' }); res.end(); return
       }
+      const store = typeof storeOrResolver === 'function' ? storeOrResolver(req) : storeOrResolver
       if (parts.length === 1 && parts[0] === 'projects') {
         if (method === 'GET') return json(res, 200, { projects: await store.list() })
         if (method === 'POST') {
           const body = await readJson(req)
           return json(res, 201, { project: await store.create(typeof body.name === 'string' ? body.name : undefined) })
+        }
+      }
+      if (parts[0] === 'connector') {
+        if (parts.length === 1 && method === 'GET') {
+          const config = await readConnectorConfig(store.root)
+          if (!config) return json(res, 200, { connected: false })
+          return json(res, 200, { connected: true, config, status: await describeConnection(config.userDataRoot) })
+        }
+        if (parts.length === 1 && method === 'PUT') {
+          const body = await readJson(req)
+          if (typeof body.path !== 'string' || !body.path.trim()) throw new HttpError(400, '缺少酒馆目录路径 path')
+          const probe = await probePath(body.path)
+          if (probe.type === 'unknown') throw new HttpError(400, probe.message)
+          const userHandle = typeof body.userHandle === 'string' && body.userHandle.trim() ? body.userHandle.trim() : undefined
+          const saved = await saveConnector(store.root, body.path, userHandle)
+          return json(res, 200, { connected: true, config: saved.config, status: saved.status })
+        }
+        if (parts.length === 1 && method === 'DELETE') {
+          await clearConnectorConfig(store.root)
+          return json(res, 200, { connected: false })
+        }
+        if (parts.length === 2 && parts[1] === 'probe' && method === 'POST') {
+          const body = await readJson(req)
+          if (typeof body.path !== 'string' || !body.path.trim()) throw new HttpError(400, '缺少酒馆目录路径 path')
+          return json(res, 200, { probe: await probePath(body.path) })
+        }
+        if (parts.length === 2 && parts[1] === 'remote' && method === 'GET') {
+          if (!(await readConnectorConfig(store.root))) throw new HttpError(400, '尚未配置酒馆连接，请先 PUT /connector')
+          const kindParam = query.get('kind')
+          return json(res, 200, { entries: await listRemote(store.root, kindParam ? oneOfKind(kindParam) : undefined) })
+        }
+        if (parts.length === 2 && parts[1] === 'import' && method === 'POST') {
+          if (!(await readConnectorConfig(store.root))) throw new HttpError(400, '尚未配置酒馆连接，请先 PUT /connector')
+          const body = await readJson(req)
+          if (typeof body.projectId !== 'string' || !body.projectId.trim()) throw new HttpError(400, '缺少 projectId')
+          const files = stringArray(body.files, 'files')
+          return json(res, 200, await importRemote(store, body.projectId, files, { replaceExisting: body.replaceExisting !== false }))
+        }
+        if (parts.length === 2 && parts[1] === 'export' && method === 'POST') {
+          if (!(await readConnectorConfig(store.root))) throw new HttpError(400, '尚未配置酒馆连接，请先 PUT /connector')
+          const body = await readJson(req)
+          if (typeof body.projectId !== 'string' || !body.projectId.trim()) throw new HttpError(400, '缺少 projectId')
+          const assetIds = stringArray(body.assetIds, 'assetIds')
+          const results = await exportRemote(store, body.projectId, assetIds, { conflict: conflictPolicy(body.conflict), presetTarget: presetTargetCategory(body.presetTarget) })
+          return json(res, 200, { results })
         }
       }
       if (parts[0] !== 'projects' || !parts[1]) throw new HttpError(404, '接口不存在')

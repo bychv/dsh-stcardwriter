@@ -1,3 +1,9 @@
 - insert:
+    - id: dsh-preset-plus
+      name: '@rain-kl/dsh-preset-plus'
+      config:
+        enabled: true
+        scopedPresets: ["preset-plus", "tavern-authoring"]
+        verbose: false
     - id: stcardwriter
       name: dsh-stcardwriter

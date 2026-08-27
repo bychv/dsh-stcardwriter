@@ -1,6 +1,11 @@
 // src/agent-tools.ts
 import { defineTool } from "@deepseek-ai/dsh-tools";
 
+// src/connector.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
+
 // src/format.ts
 import { createHash, randomUUID } from "node:crypto";
 
@@ -171,7 +176,9 @@ var fdt = new u8(32);
 for (i = 0; i < 32; ++i)
   fdt[i] = 5;
 var i;
+var flm = /* @__PURE__ */ hMap(flt, 9, 0);
 var flrm = /* @__PURE__ */ hMap(flt, 9, 1);
+var fdm = /* @__PURE__ */ hMap(fdt, 5, 0);
 var fdrm = /* @__PURE__ */ hMap(fdt, 5, 1);
 var max = function(a) {
   var m = a[0];
@@ -367,7 +374,353 @@ var inflt = function(dat, st, buf, dict) {
   } while (!final);
   return bt != buf.length && noBuf ? slc(buf, 0, bt) : buf.subarray(0, bt);
 };
+var wbits = function(d, p, v) {
+  v <<= p & 7;
+  var o = p / 8 | 0;
+  d[o] |= v;
+  d[o + 1] |= v >> 8;
+};
+var wbits16 = function(d, p, v) {
+  v <<= p & 7;
+  var o = p / 8 | 0;
+  d[o] |= v;
+  d[o + 1] |= v >> 8;
+  d[o + 2] |= v >> 16;
+};
+var hTree = function(d, mb) {
+  var t = [];
+  for (var i = 0; i < d.length; ++i) {
+    if (d[i])
+      t.push({ s: i, f: d[i] });
+  }
+  var s = t.length;
+  var t2 = t.slice();
+  if (!s)
+    return { t: et, l: 0 };
+  if (s == 1) {
+    var v = new u8(t[0].s + 1);
+    v[t[0].s] = 1;
+    return { t: v, l: 1 };
+  }
+  t.sort(function(a, b) {
+    return a.f - b.f;
+  });
+  t.push({ s: -1, f: 25001 });
+  var l = t[0], r = t[1], i0 = 0, i1 = 1, i2 = 2;
+  t[0] = { s: -1, f: l.f + r.f, l, r };
+  while (i1 != s - 1) {
+    l = t[t[i0].f < t[i2].f ? i0++ : i2++];
+    r = t[i0 != i1 && t[i0].f < t[i2].f ? i0++ : i2++];
+    t[i1++] = { s: -1, f: l.f + r.f, l, r };
+  }
+  var maxSym = t2[0].s;
+  for (var i = 1; i < s; ++i) {
+    if (t2[i].s > maxSym)
+      maxSym = t2[i].s;
+  }
+  var tr = new u16(maxSym + 1);
+  var mbt = ln(t[i1 - 1], tr, 0);
+  if (mbt > mb) {
+    var i = 0, dt = 0;
+    var lft = mbt - mb, cst = 1 << lft;
+    t2.sort(function(a, b) {
+      return tr[b.s] - tr[a.s] || a.f - b.f;
+    });
+    for (; i < s; ++i) {
+      var i2_1 = t2[i].s;
+      if (tr[i2_1] > mb) {
+        dt += cst - (1 << mbt - tr[i2_1]);
+        tr[i2_1] = mb;
+      } else
+        break;
+    }
+    dt >>= lft;
+    while (dt > 0) {
+      var i2_2 = t2[i].s;
+      if (tr[i2_2] < mb)
+        dt -= 1 << mb - tr[i2_2]++ - 1;
+      else
+        ++i;
+    }
+    for (; i >= 0 && dt; --i) {
+      var i2_3 = t2[i].s;
+      if (tr[i2_3] == mb) {
+        --tr[i2_3];
+        ++dt;
+      }
+    }
+    mbt = mb;
+  }
+  return { t: new u8(tr), l: mbt };
+};
+var ln = function(n, l, d) {
+  return n.s == -1 ? Math.max(ln(n.l, l, d + 1), ln(n.r, l, d + 1)) : l[n.s] = d;
+};
+var lc = function(c) {
+  var s = c.length;
+  while (s && !c[--s])
+    ;
+  var cl = new u16(++s);
+  var cli = 0, cln = c[0], cls = 1;
+  var w = function(v) {
+    cl[cli++] = v;
+  };
+  for (var i = 1; i <= s; ++i) {
+    if (c[i] == cln && i != s)
+      ++cls;
+    else {
+      if (!cln && cls > 2) {
+        for (; cls > 138; cls -= 138)
+          w(32754);
+        if (cls > 2) {
+          w(cls > 10 ? cls - 11 << 5 | 28690 : cls - 3 << 5 | 12305);
+          cls = 0;
+        }
+      } else if (cls > 3) {
+        w(cln), --cls;
+        for (; cls > 6; cls -= 6)
+          w(8304);
+        if (cls > 2)
+          w(cls - 3 << 5 | 8208), cls = 0;
+      }
+      while (cls--)
+        w(cln);
+      cls = 1;
+      cln = c[i];
+    }
+  }
+  return { c: cl.subarray(0, cli), n: s };
+};
+var clen = function(cf, cl) {
+  var l = 0;
+  for (var i = 0; i < cl.length; ++i)
+    l += cf[i] * cl[i];
+  return l;
+};
+var wfblk = function(out, pos, dat) {
+  var s = dat.length;
+  var o = shft(pos + 2);
+  out[o] = s & 255;
+  out[o + 1] = s >> 8;
+  out[o + 2] = out[o] ^ 255;
+  out[o + 3] = out[o + 1] ^ 255;
+  for (var i = 0; i < s; ++i)
+    out[o + i + 4] = dat[i];
+  return (o + 4 + s) * 8;
+};
+var wblk = function(dat, out, final, syms, lf, df, eb, li, bs, bl, p) {
+  wbits(out, p++, final);
+  ++lf[256];
+  var _a2 = hTree(lf, 15), dlt = _a2.t, mlb = _a2.l;
+  var _b2 = hTree(df, 15), ddt = _b2.t, mdb = _b2.l;
+  var _c = lc(dlt), lclt = _c.c, nlc = _c.n;
+  var _d = lc(ddt), lcdt = _d.c, ndc = _d.n;
+  var lcfreq = new u16(19);
+  for (var i = 0; i < lclt.length; ++i)
+    ++lcfreq[lclt[i] & 31];
+  for (var i = 0; i < lcdt.length; ++i)
+    ++lcfreq[lcdt[i] & 31];
+  var _e = hTree(lcfreq, 7), lct = _e.t, mlcb = _e.l;
+  var nlcc = 19;
+  for (; nlcc > 4 && !lct[clim[nlcc - 1]]; --nlcc)
+    ;
+  var flen = bl + 5 << 3;
+  var ftlen = clen(lf, flt) + clen(df, fdt) + eb;
+  var dtlen = clen(lf, dlt) + clen(df, ddt) + eb + 14 + 3 * nlcc + clen(lcfreq, lct) + 2 * lcfreq[16] + 3 * lcfreq[17] + 7 * lcfreq[18];
+  if (bs >= 0 && flen <= ftlen && flen <= dtlen)
+    return wfblk(out, p, dat.subarray(bs, bs + bl));
+  var lm, ll, dm, dl;
+  wbits(out, p, 1 + (dtlen < ftlen)), p += 2;
+  if (dtlen < ftlen) {
+    lm = hMap(dlt, mlb, 0), ll = dlt, dm = hMap(ddt, mdb, 0), dl = ddt;
+    var llm = hMap(lct, mlcb, 0);
+    wbits(out, p, nlc - 257);
+    wbits(out, p + 5, ndc - 1);
+    wbits(out, p + 10, nlcc - 4);
+    p += 14;
+    for (var i = 0; i < nlcc; ++i)
+      wbits(out, p + 3 * i, lct[clim[i]]);
+    p += 3 * nlcc;
+    var lcts = [lclt, lcdt];
+    for (var it = 0; it < 2; ++it) {
+      var clct = lcts[it];
+      for (var i = 0; i < clct.length; ++i) {
+        var len = clct[i] & 31;
+        wbits(out, p, llm[len]), p += lct[len];
+        if (len > 15)
+          wbits(out, p, clct[i] >> 5 & 127), p += clct[i] >> 12;
+      }
+    }
+  } else {
+    lm = flm, ll = flt, dm = fdm, dl = fdt;
+  }
+  for (var i = 0; i < li; ++i) {
+    var sym = syms[i];
+    if (sym > 255) {
+      var len = sym >> 18 & 31;
+      wbits16(out, p, lm[len + 257]), p += ll[len + 257];
+      if (len > 7)
+        wbits(out, p, sym >> 23 & 31), p += fleb[len];
+      var dst = sym & 31;
+      wbits16(out, p, dm[dst]), p += dl[dst];
+      if (dst > 3)
+        wbits16(out, p, sym >> 5 & 8191), p += fdeb[dst];
+    } else {
+      wbits16(out, p, lm[sym]), p += ll[sym];
+    }
+  }
+  wbits16(out, p, lm[256]);
+  return p + ll[256];
+};
+var deo = /* @__PURE__ */ new i32([65540, 131080, 131088, 131104, 262176, 1048704, 1048832, 2114560, 2117632]);
 var et = /* @__PURE__ */ new u8(0);
+var dflt = function(dat, lvl, plvl, pre, post, st) {
+  var s = st.z || dat.length;
+  var o = new u8(pre + s + 5 * (1 + Math.ceil(s / 7e3)) + post);
+  var w = o.subarray(pre, o.length - post);
+  var lst = st.l;
+  var pos = (st.r || 0) & 7;
+  if (lvl) {
+    if (pos)
+      w[0] = st.r >> 3;
+    var opt = deo[lvl - 1];
+    var n = opt >> 13, c = opt & 8191;
+    var msk_1 = (1 << plvl) - 1;
+    var prev = st.p || new u16(32768), head = st.h || new u16(msk_1 + 1);
+    var bs1_1 = Math.ceil(plvl / 3), bs2_1 = 2 * bs1_1;
+    var hsh = function(i2) {
+      return (dat[i2] ^ dat[i2 + 1] << bs1_1 ^ dat[i2 + 2] << bs2_1) & msk_1;
+    };
+    var syms = new i32(25e3);
+    var lf = new u16(288), df = new u16(32);
+    var lc_1 = 0, eb = 0, i = st.i || 0, li = 0, wi = st.w || 0, bs = 0;
+    for (; i + 2 < s; ++i) {
+      var hv = hsh(i);
+      var imod = i & 32767, pimod = head[hv];
+      prev[imod] = pimod;
+      head[hv] = imod;
+      if (wi <= i) {
+        var rem = s - i;
+        if ((lc_1 > 7e3 || li > 24576) && (rem > 423 || !lst)) {
+          pos = wblk(dat, w, 0, syms, lf, df, eb, li, bs, i - bs, pos);
+          li = lc_1 = eb = 0, bs = i;
+          for (var j = 0; j < 286; ++j)
+            lf[j] = 0;
+          for (var j = 0; j < 30; ++j)
+            df[j] = 0;
+        }
+        var l = 2, d = 0, ch_1 = c, dif = imod - pimod & 32767;
+        if (rem > 2 && hv == hsh(i - dif)) {
+          var maxn = Math.min(n, rem) - 1;
+          var maxd = Math.min(32767, i);
+          var ml = Math.min(258, rem);
+          while (dif <= maxd && --ch_1 && imod != pimod) {
+            if (dat[i + l] == dat[i + l - dif]) {
+              var nl = 0;
+              for (; nl < ml && dat[i + nl] == dat[i + nl - dif]; ++nl)
+                ;
+              if (nl > l) {
+                l = nl, d = dif;
+                if (nl > maxn)
+                  break;
+                var mmd = Math.min(dif, nl - 2);
+                var md = 0;
+                for (var j = 0; j < mmd; ++j) {
+                  var ti = i - dif + j & 32767;
+                  var pti = prev[ti];
+                  var cd = ti - pti & 32767;
+                  if (cd > md)
+                    md = cd, pimod = ti;
+                }
+              }
+            }
+            imod = pimod, pimod = prev[imod];
+            dif += imod - pimod & 32767;
+          }
+        }
+        if (d) {
+          syms[li++] = 268435456 | revfl[l] << 18 | revfd[d];
+          var lin = revfl[l] & 31, din = revfd[d] & 31;
+          eb += fleb[lin] + fdeb[din];
+          ++lf[257 + lin];
+          ++df[din];
+          wi = i + l;
+          ++lc_1;
+        } else {
+          syms[li++] = dat[i];
+          ++lf[dat[i]];
+        }
+      }
+    }
+    for (i = Math.max(i, wi); i < s; ++i) {
+      syms[li++] = dat[i];
+      ++lf[dat[i]];
+    }
+    pos = wblk(dat, w, lst, syms, lf, df, eb, li, bs, i - bs, pos);
+    if (!lst) {
+      st.r = pos & 7 | w[pos / 8 | 0] << 3;
+      pos -= 7;
+      st.h = head, st.p = prev, st.i = i, st.w = wi;
+    }
+  } else {
+    for (var i = st.w || 0; i < s + lst; i += 65535) {
+      var e = i + 65535;
+      if (e >= s) {
+        w[pos / 8 | 0] = lst;
+        e = s;
+      }
+      pos = wfblk(w, pos + 1, dat.subarray(i, e));
+    }
+    st.i = s;
+  }
+  return slc(o, 0, pre + shft(pos) + post);
+};
+var crct = /* @__PURE__ */ (function() {
+  var t = new Int32Array(256);
+  for (var i = 0; i < 256; ++i) {
+    var c = i, k = 9;
+    while (--k)
+      c = (c & 1 && -306674912) ^ c >>> 1;
+    t[i] = c;
+  }
+  return t;
+})();
+var crc = function() {
+  var c = -1;
+  return {
+    p: function(d) {
+      var cr = c;
+      for (var i = 0; i < d.length; ++i)
+        cr = crct[cr & 255 ^ d[i]] ^ cr >>> 8;
+      c = cr;
+    },
+    d: function() {
+      return ~c;
+    }
+  };
+};
+var dopt = function(dat, opt, pre, post, st) {
+  if (!st) {
+    st = { l: 1 };
+    if (opt.dictionary) {
+      var dict = opt.dictionary.subarray(-32768);
+      var newDat = new u8(dict.length + dat.length);
+      newDat.set(dict);
+      newDat.set(dat, dict.length);
+      dat = newDat;
+      st.w = dict.length;
+    }
+  }
+  return dflt(dat, opt.level == null ? 6 : opt.level, opt.mem == null ? st.l ? Math.ceil(Math.max(8, Math.min(13, Math.log(dat.length))) * 1.5) : 20 : 12 + opt.mem, pre, post, st);
+};
+var mrg = function(a, b) {
+  var o = {};
+  for (var k in a)
+    o[k] = a[k];
+  for (var k in b)
+    o[k] = b[k];
+  return o;
+};
 var b2 = function(d, b) {
   return d[b] | d[b + 1] << 8;
 };
@@ -377,9 +730,30 @@ var b4 = function(d, b) {
 var b8 = function(d, b) {
   return b4(d, b) + b4(d, b + 4) * 4294967296;
 };
+var wbytes = function(d, b, v) {
+  for (; v; ++b)
+    d[b] = v, v >>>= 8;
+};
+function deflateSync(data, opts) {
+  return dopt(data, opts || {}, 0, 0);
+}
 function inflateSync(data, opts) {
   return inflt(data, { i: 2 }, opts && opts.out, opts && opts.dictionary);
 }
+var fltn = function(d, p, t, o) {
+  for (var k in d) {
+    var val = d[k], n = p + k, op = o;
+    if (Array.isArray(val))
+      op = mrg(o, val[1]), val = val[0];
+    if (ArrayBuffer.isView(val))
+      t[n] = [val, op];
+    else {
+      t[n += "/"] = [new u8(0), op];
+      fltn(val, n, t, o);
+    }
+  }
+};
+var te = typeof TextEncoder != "undefined" && /* @__PURE__ */ new TextEncoder();
 var td = typeof TextDecoder != "undefined" && /* @__PURE__ */ new TextDecoder();
 var tds = 0;
 try {
@@ -403,6 +777,39 @@ var dutf8 = function(d) {
       r += String.fromCharCode((c & 15) << 12 | (d[i++] & 63) << 6 | d[i++] & 63);
   }
 };
+function strToU8(str, latin1) {
+  if (latin1) {
+    var ar_1 = new u8(str.length);
+    for (var i = 0; i < str.length; ++i)
+      ar_1[i] = str.charCodeAt(i);
+    return ar_1;
+  }
+  if (te)
+    return te.encode(str);
+  var l = str.length;
+  var ar = new u8(str.length + (str.length >> 1));
+  var ai = 0;
+  var w = function(v) {
+    ar[ai++] = v;
+  };
+  for (var i = 0; i < l; ++i) {
+    if (ai + 5 > ar.length) {
+      var n = new u8(ai + 8 + (l - i << 1));
+      n.set(ar);
+      ar = n;
+    }
+    var c = str.charCodeAt(i);
+    if (c < 128 || latin1)
+      w(c);
+    else if (c < 2048)
+      w(192 | c >> 6), w(128 | c & 63);
+    else if (c > 55295 && c < 57344)
+      c = 65536 + (c & 1023 << 10) | str.charCodeAt(++i) & 1023, w(240 | c >> 18), w(128 | c >> 12 & 63), w(128 | c >> 6 & 63), w(128 | c & 63);
+    else
+      w(224 | c >> 12), w(128 | c >> 6 & 63), w(128 | c & 63);
+  }
+  return slc(ar, 0, ai);
+}
 function strFromU8(dat, latin1) {
   if (latin1) {
     var r = "";
@@ -445,6 +852,107 @@ var z64hs = function(d, b, l, z, sc, su, off) {
   }
   return [sc, su, off, 0];
 };
+var exfl = function(ex) {
+  var le = 0;
+  if (ex) {
+    for (var k in ex) {
+      var l = ex[k].length;
+      if (l > 65535)
+        err(9);
+      le += l + 4;
+    }
+  }
+  return le;
+};
+var wzh = function(d, b, f, fn, u, c, ce, co) {
+  var fl2 = fn.length, ex = f.extra, col = co && co.length;
+  var exl = exfl(ex);
+  wbytes(d, b, ce != null ? 33639248 : 67324752), b += 4;
+  if (ce != null)
+    d[b++] = 20, d[b++] = f.os;
+  d[b] = 20, b += 2;
+  d[b++] = f.flag << 1 | (c < 0 && 8), d[b++] = u && 8;
+  d[b++] = f.compression & 255, d[b++] = f.compression >> 8;
+  var dt = new Date(f.mtime == null ? Date.now() : f.mtime), y = dt.getFullYear() - 1980;
+  if (y < 0 || y > 119)
+    err(10);
+  wbytes(d, b, y << 25 | dt.getMonth() + 1 << 21 | dt.getDate() << 16 | dt.getHours() << 11 | dt.getMinutes() << 5 | dt.getSeconds() >> 1), b += 4;
+  if (c != -1) {
+    wbytes(d, b, f.crc);
+    wbytes(d, b + 4, c < 0 ? -c - 2 : c);
+    wbytes(d, b + 8, f.size);
+  }
+  wbytes(d, b + 12, fl2);
+  wbytes(d, b + 14, exl), b += 16;
+  if (ce != null) {
+    wbytes(d, b, col);
+    wbytes(d, b + 6, f.attrs);
+    wbytes(d, b + 10, ce), b += 14;
+  }
+  d.set(fn, b);
+  b += fl2;
+  if (exl) {
+    for (var k in ex) {
+      var exf = ex[k], l = exf.length;
+      wbytes(d, b, +k);
+      wbytes(d, b + 2, l);
+      d.set(exf, b + 4), b += 4 + l;
+    }
+  }
+  if (col)
+    d.set(co, b), b += col;
+  return b;
+};
+var wzf = function(o, b, c, d, e) {
+  wbytes(o, b, 101010256);
+  wbytes(o, b + 8, c);
+  wbytes(o, b + 10, c);
+  wbytes(o, b + 12, d);
+  wbytes(o, b + 16, e);
+};
+function zipSync(data, opts) {
+  if (!opts)
+    opts = {};
+  var r = {};
+  var files = [];
+  fltn(data, "", r, opts);
+  var o = 0;
+  var tot = 0;
+  for (var fn in r) {
+    var _a2 = r[fn], file = _a2[0], p = _a2[1];
+    var compression = p.level == 0 ? 0 : 8;
+    var f = strToU8(fn), s = f.length;
+    var com = p.comment, m = com && strToU8(com), ms = m && m.length;
+    var exl = exfl(p.extra);
+    if (s > 65535)
+      err(11);
+    var d = compression ? deflateSync(file, p) : file, l = d.length;
+    var c = crc();
+    c.p(file);
+    files.push(mrg(p, {
+      size: file.length,
+      crc: c.d(),
+      c: d,
+      f,
+      m,
+      u: s != fn.length || m && com.length != ms,
+      o,
+      compression
+    }));
+    o += 30 + s + exl + l;
+    tot += 76 + 2 * (s + exl) + (ms || 0) + l;
+  }
+  var out = new u8(tot + 22), oe = o, cdl = tot - o;
+  for (var i = 0; i < files.length; ++i) {
+    var f = files[i];
+    wzh(out, f.o, f, f.f, f.u, f.c.length);
+    var badd = 30 + f.f.length + exfl(f.extra);
+    out.set(f.c, f.o + badd);
+    wzh(out, o, f, f.f, f.u, f.c.length, f.o, f.m), o += 16 + badd + (f.m ? f.m.length : 0);
+  }
+  wzf(out, o, files.length, cdl, oe);
+  return out;
+}
 function unzipSync(data, opts) {
   var files = {};
   var e = data.length - 22;
@@ -488,7 +996,35 @@ function unzipSync(data, opts) {
 }
 
 // src/png.ts
+import { deflateSync as deflateSync2 } from "node:zlib";
 var SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+var crcTable;
+function table() {
+  if (crcTable) return crcTable;
+  crcTable = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+    crcTable[n] = c >>> 0;
+  }
+  return crcTable;
+}
+function crc32(bytes) {
+  let crc2 = 4294967295;
+  const values = table();
+  for (const value of bytes) crc2 = values[(crc2 ^ value) & 255] ^ crc2 >>> 8;
+  return (crc2 ^ 4294967295) >>> 0;
+}
+function encodeChunk(type, data) {
+  const typeBytes = Buffer.from(type, "ascii");
+  const body = Buffer.from(data);
+  const result = Buffer.allocUnsafe(body.length + 12);
+  result.writeUInt32BE(body.length, 0);
+  typeBytes.copy(result, 4);
+  body.copy(result, 8);
+  result.writeUInt32BE(crc32(Buffer.concat([typeBytes, body])), body.length + 8);
+  return result;
+}
 function parsePngChunks(input) {
   const bytes = Buffer.from(input);
   if (bytes.length < 20 || !bytes.subarray(0, 8).equals(SIGNATURE)) throw new Error("\u4E0D\u662F\u6709\u6548\u7684 PNG \u6587\u4EF6");
@@ -526,6 +1062,52 @@ function readExtendedAssetsFromPng(input) {
     path: value.keyword.slice("chara-ext-asset_:".length).replaceAll("\\", "/").replace(/^\/+/, ""),
     bytes: Buffer.from(value.value, "base64")
   }));
+}
+function makePlaceholderPng(width = 512, height = 768) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const stride = width * 4 + 1;
+  const raw = Buffer.alloc(stride * height);
+  for (let y = 0; y < height; y += 1) {
+    raw[y * stride] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const at = y * stride + 1 + x * 4;
+      raw[at] = 33;
+      raw[at + 1] = 28;
+      raw[at + 2] = 49;
+      raw[at + 3] = 255;
+    }
+  }
+  return Buffer.concat([
+    SIGNATURE,
+    encodeChunk("IHDR", ihdr),
+    encodeChunk("IDAT", deflateSync2(raw, { level: 9 })),
+    encodeChunk("IEND", Buffer.alloc(0))
+  ]);
+}
+function writeCharacterToPng(input, v2, v3, extendedAssets) {
+  const chunks = parsePngChunks(input ?? makePlaceholderPng());
+  const meta = /* @__PURE__ */ new Map([
+    ["chara", Buffer.from(JSON.stringify(v2), "utf8").toString("base64")],
+    ["ccv3", Buffer.from(JSON.stringify(v3), "utf8").toString("base64")]
+  ]);
+  const encodedMeta = [...meta].map(([keyword, value]) => encodeChunk("tEXt", Buffer.from(`${keyword}\0${value}`, "latin1")));
+  const encodedAssets = extendedAssets?.map((resource) => encodeChunk("tEXt", Buffer.from(
+    `chara-ext-asset_:${resource.path}\0${Buffer.from(resource.bytes).toString("base64")}`,
+    "latin1"
+  ))) ?? [];
+  const output2 = [SIGNATURE];
+  for (const chunk of chunks) {
+    const text = decodeText(chunk);
+    if (text && meta.has(text.keyword)) continue;
+    if (extendedAssets && text?.keyword.startsWith("chara-ext-asset_:")) continue;
+    if (chunk.type === "IEND") output2.push(...encodedMeta, ...encodedAssets);
+    output2.push(encodeChunk(chunk.type, chunk.data));
+  }
+  return Buffer.concat(output2);
 }
 
 // src/format.ts
@@ -597,6 +1179,14 @@ function completeCharacterData(source) {
   if (typeof data.post_history_instructions !== "string") data.post_history_instructions = "";
   return data;
 }
+function toCharacterV2(card) {
+  return {
+    ...clone(card),
+    spec: "chara_card_v2",
+    spec_version: "2.0",
+    data: completeCharacterData(characterData(card))
+  };
+}
 function toCharacterV3(card) {
   return {
     ...clone(card),
@@ -604,6 +1194,10 @@ function toCharacterV3(card) {
     spec_version: "3.0",
     data: completeCharacterData(characterData(card))
   };
+}
+function toCharacterV1(card) {
+  const data = characterData(card);
+  return Object.fromEntries(REQUIRED_CHARACTER_FIELDS.map((field) => [field, stringValue(data[field])]));
 }
 function createBlankData(kind2) {
   if (kind2 === "character") {
@@ -783,6 +1377,58 @@ function importArchive(filename, bytes) {
     }
   }
   return { assets, errors };
+}
+function safeExportName(name) {
+  const safe = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim().replace(/[. ]+$/g, "");
+  return safe || "untitled";
+}
+function jsonFile(filename, data) {
+  return { filename, mimeType: "application/json; charset=utf-8", bytes: Buffer.from(`${JSON.stringify(data, null, 2)}
+`, "utf8") };
+}
+function convertEmbeddedUris(card, container) {
+  const result = toCharacterV3(card);
+  const data = characterData(result);
+  if (!Array.isArray(data.assets)) return result;
+  data.assets = data.assets.map((value) => {
+    if (!isObject(value) || typeof value.uri !== "string") return value;
+    const next = clone(value);
+    const uri = value.uri;
+    if (container === "charx" && uri.startsWith("__asset:")) next.uri = `embeded://${normalizeResourcePath(uri.slice("__asset:".length))}`;
+    if (container === "png" && /^(?:embeded|embedded):\/\//i.test(uri)) next.uri = `__asset:${normalizeResourcePath(uri.replace(/^(?:embeded|embedded):\/\//i, ""))}`;
+    return next;
+  });
+  return result;
+}
+function exportAsset(asset, requested) {
+  const stem = safeExportName(asset.name);
+  if (asset.kind === "character") {
+    if (requested === "v1") return jsonFile(`${stem}.v1.json`, toCharacterV1(asset.data));
+    if (requested === "v2") return jsonFile(`${stem}.v2.json`, toCharacterV2(asset.data));
+    if (requested === "json" || requested === "v3") return jsonFile(`${stem}.json`, toCharacterV3(asset.data));
+    if (requested === "charx") {
+      const card = Buffer.from(`${JSON.stringify(convertEmbeddedUris(asset.data, "charx"), null, 2)}
+`, "utf8");
+      const files = { "card.json": card };
+      for (const resource of asset.resources ?? []) {
+        const path = normalizeResourcePath(resource.path);
+        if (path && path.toLowerCase() !== "card.json") files[path] = attachedBytes(resource);
+      }
+      return { filename: `${stem}.charx`, mimeType: "application/zip", bytes: zipSync(files, { level: 9 }) };
+    }
+    const original = asset.source?.pngBase64 ? Buffer.from(asset.source.pngBase64, "base64") : makePlaceholderPng();
+    return {
+      filename: `${stem}.png`,
+      mimeType: "image/png",
+      bytes: writeCharacterToPng(
+        original,
+        toCharacterV2(asset.data),
+        convertEmbeddedUris(asset.data, "png"),
+        (asset.resources ?? []).map((resource) => ({ path: normalizeResourcePath(resource.path), bytes: attachedBytes(resource) }))
+      )
+    };
+  }
+  return jsonFile(`${stem}.json`, asset.data);
 }
 function embeddedPath(uri) {
   if (uri.startsWith("__asset:")) return normalizeResourcePath(uri.slice("__asset:".length));
@@ -1174,11 +1820,264 @@ function projectForAgent(project) {
   return toLosslessJson(view);
 }
 
+// src/connector.ts
+var REMOTE_CATEGORIES = [
+  { id: "characters", directory: "characters", kind: "character", extensions: [".png", ".json"] },
+  { id: "worlds", directory: "worlds", kind: "worldbook", extensions: [".json"] },
+  { id: "chat-completion", directory: "OpenAI Settings", kind: "preset", extensions: [".json"] },
+  { id: "textgen", directory: "TextGen Settings", kind: "preset", extensions: [".json"] },
+  { id: "context", directory: "context", kind: "preset", extensions: [".json"] },
+  { id: "instruct", directory: "instruct", kind: "preset", extensions: [".json"] },
+  { id: "sysprompt", directory: "sysprompt", kind: "preset", extensions: [".json"] }
+];
+var REMOTE_PRESET_CATEGORY_IDS = REMOTE_CATEGORIES.filter((category) => category.kind === "preset").map((category) => category.id);
+var PRESET_FORMAT_CATEGORY = {
+  "chat-completion-preset": "chat-completion",
+  "textgen-preset": "textgen",
+  "context-preset": "context",
+  "instruct-preset": "instruct",
+  "unknown-preset": "sysprompt"
+};
+function connectorConfigPath(storeRoot) {
+  return join(dirname(resolve(storeRoot)), "connector.json");
+}
+async function readConnectorConfig(storeRoot) {
+  try {
+    const parsed = JSON.parse(await readFile(connectorConfigPath(storeRoot), "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return void 0;
+    const config = parsed;
+    if (config.version !== 1 || typeof config.path !== "string" || typeof config.userDataRoot !== "string") return void 0;
+    return {
+      version: 1,
+      path: config.path,
+      userHandle: typeof config.userHandle === "string" ? config.userHandle : "",
+      userDataRoot: config.userDataRoot,
+      savedAt: typeof config.savedAt === "string" ? config.savedAt : ""
+    };
+  } catch {
+    return void 0;
+  }
+}
+async function writeConnectorConfig(storeRoot, config) {
+  const destination = connectorConfigPath(storeRoot);
+  await mkdir(dirname(destination), { recursive: true });
+  const temporary = join(dirname(destination), `.connector.${randomUUID2()}.tmp`);
+  await writeFile(temporary, `${JSON.stringify(config, null, 2)}
+`, { encoding: "utf8", flag: "wx" });
+  await rename(temporary, destination);
+}
+async function requireConfig(storeRoot) {
+  const config = await readConnectorConfig(storeRoot);
+  if (!config) throw new Error("\u5C1A\u672A\u914D\u7F6E\u9152\u9986\u8FDE\u63A5\uFF1B\u8BF7\u5148\u5728\u8FDE\u63A5\u5668\u9762\u677F\u914D\u7F6E\u9152\u9986\u76EE\u5F55\uFF0C\u6216\u4F7F\u7528 tavern_connect_configure");
+  return config;
+}
+async function isDirectory(path) {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+async function fileExists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function readdirFiles(directory, extensions) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  return entries.filter((entry) => entry.isFile() && extensions.some((ext) => entry.name.toLowerCase().endsWith(ext))).map((entry) => entry.name).sort((a, b) => a.localeCompare(b));
+}
+async function describeConnection(userDataRoot) {
+  const root = resolve(userDataRoot);
+  const categories = await Promise.all(REMOTE_CATEGORIES.map(async (category) => {
+    const directory = join(root, category.directory);
+    const exists = await isDirectory(directory);
+    return { id: category.id, directory: category.directory, kind: category.kind, exists, count: exists ? (await readdirFiles(directory, category.extensions)).length : 0 };
+  }));
+  return { userDataRoot: root, categories };
+}
+async function probePath(path) {
+  if (typeof path !== "string" || !path.trim()) {
+    return { path: String(path ?? ""), type: "unknown", message: "\u8BF7\u586B\u5199\u9152\u9986\u5B89\u88C5\u6839\u76EE\u5F55\u6216\u7528\u6237\u6570\u636E\u76EE\u5F55", userHandles: [] };
+  }
+  const target = resolve(path.trim());
+  if (await isDirectory(join(target, "characters"))) {
+    return { path, type: "user-data-root", message: "\u8BC6\u522B\u4E3A\u9152\u9986\u7528\u6237\u6570\u636E\u76EE\u5F55", userHandles: [], userHandle: "", status: await describeConnection(target) };
+  }
+  const dataBase = await isDirectory(join(target, "data")) ? join(target, "data") : target;
+  const handles = [];
+  if (await isDirectory(dataBase)) {
+    for (const entry of await readdir(dataBase, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith("_") || entry.name.startsWith(".")) continue;
+      if (await isDirectory(join(dataBase, entry.name, "characters"))) handles.push(entry.name);
+    }
+  }
+  if (handles.length) {
+    const userHandle = handles.includes("default-user") ? "default-user" : handles[0];
+    return {
+      path,
+      type: "install-root",
+      message: dataBase === target ? `\u8BC6\u522B\u4E3A\u9152\u9986\u7528\u6237\u76EE\u5F55\u96C6\u5408\uFF0C\u542B ${handles.length} \u4E2A\u7528\u6237` : `\u8BC6\u522B\u4E3A\u9152\u9986\u5B89\u88C5\u6839\u76EE\u5F55\uFF0Cdata/ \u4E0B\u6709 ${handles.length} \u4E2A\u7528\u6237`,
+      userHandles: handles,
+      userHandle,
+      status: await describeConnection(join(dataBase, userHandle))
+    };
+  }
+  return { path, type: "unknown", message: "\u76EE\u5F55\u4E0B\u6CA1\u6709 characters/\uFF0C\u4E5F\u6CA1\u6709 data/<\u7528\u6237>/characters\uFF1B\u8BF7\u786E\u8BA4\u8DEF\u5F84\u6307\u5411\u9152\u9986\u5B89\u88C5\u6839\u76EE\u5F55\u6216\u7528\u6237\u6570\u636E\u76EE\u5F55", userHandles: [] };
+}
+async function resolveUserDataRoot(path, handleOverride) {
+  const probe = await probePath(path);
+  if (probe.type === "unknown") throw new Error(probe.message);
+  if (probe.type === "user-data-root") return { type: probe.type, userDataRoot: resolve(path.trim()), userHandle: "" };
+  const target = resolve(path.trim());
+  const dataBase = await isDirectory(join(target, "data")) ? join(target, "data") : target;
+  const userHandle = handleOverride && probe.userHandles.includes(handleOverride) ? handleOverride : probe.userHandle;
+  return { type: probe.type, userDataRoot: join(dataBase, userHandle), userHandle };
+}
+async function saveConnector(storeRoot, path, userHandle) {
+  const resolved = await resolveUserDataRoot(path, userHandle?.trim() || void 0);
+  const config = {
+    version: 1,
+    path: path.trim(),
+    userHandle: resolved.userHandle,
+    userDataRoot: resolved.userDataRoot,
+    savedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await writeConnectorConfig(storeRoot, config);
+  return { config, status: await describeConnection(config.userDataRoot) };
+}
+async function listRemote(storeRoot, kind2) {
+  const config = await requireConfig(storeRoot);
+  const entries = [];
+  for (const category of REMOTE_CATEGORIES) {
+    if (kind2 && category.kind !== kind2) continue;
+    const directory = join(config.userDataRoot, category.directory);
+    if (!await isDirectory(directory)) continue;
+    for (const filename of await readdirFiles(directory, category.extensions)) {
+      const info = await stat(join(directory, filename));
+      entries.push({
+        category: category.id,
+        directory: category.directory,
+        kind: category.kind,
+        name: filename.replace(/\.[^.]+$/, ""),
+        file: `${category.directory}/${filename}`,
+        bytes: info.size,
+        modifiedAt: info.mtime.toISOString()
+      });
+    }
+  }
+  return entries.sort((a, b) => a.file.localeCompare(b.file));
+}
+function safeRemoteFile(userDataRoot, file) {
+  const normalized = file.replaceAll("\\", "/").replace(/^\/+/, "");
+  if (!normalized || normalized.split("/").some((part) => !part || part === "." || part === "..")) throw new Error(`\u975E\u6CD5\u7684\u9152\u9986\u6587\u4EF6\u8DEF\u5F84\uFF1A${file}`);
+  const first = normalized.slice(0, normalized.indexOf("/"));
+  const category = REMOTE_CATEGORIES.find((value) => value.directory.toLowerCase() === first.toLowerCase());
+  if (!category) throw new Error(`\u4E0D\u652F\u6301\u7684\u9152\u9986\u76EE\u5F55\uFF1A${first}\uFF08\u652F\u6301 ${REMOTE_CATEGORIES.map((value) => value.directory).join("\u3001")}\uFF09`);
+  if (!category.extensions.some((ext) => normalized.toLowerCase().endsWith(ext))) throw new Error(`\u4E0D\u652F\u6301\u7684\u6587\u4EF6\u7C7B\u578B\uFF1A${normalized}`);
+  const absolute = resolve(userDataRoot, normalized);
+  const back = relative(resolve(userDataRoot), absolute);
+  if (!back || back.startsWith("..")) throw new Error(`\u6587\u4EF6\u8DEF\u5F84\u8D8A\u51FA\u9152\u9986\u6570\u636E\u76EE\u5F55\uFF1A${file}`);
+  return { category, file: normalized, absolute };
+}
+var MAX_REMOTE_ITEMS = 500;
+async function importRemote(store, projectId, files, options = {}) {
+  if (!Array.isArray(files) || !files.length) throw new Error("files \u4E0D\u80FD\u4E3A\u7A7A");
+  if (files.length > MAX_REMOTE_ITEMS) throw new Error(`files \u6700\u591A\u5141\u8BB8 ${MAX_REMOTE_ITEMS} \u9879`);
+  const config = await requireConfig(store.root);
+  const replaceExisting = options.replaceExisting !== false;
+  const assets = [];
+  const errors = [];
+  for (const file of [...new Set(files)]) {
+    try {
+      const located = safeRemoteFile(config.userDataRoot, file);
+      const bytes = await readFile(located.absolute);
+      const result = importArchive(located.file, bytes);
+      assets.push(...result.assets);
+      for (const error of result.errors) errors.push({ file, error: `${error.filename}: ${error.error}` });
+    } catch (error) {
+      errors.push({ file, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  let imported = 0;
+  let replaced = 0;
+  const project = await store.update(projectId, (value) => {
+    for (const asset of assets) {
+      const index = replaceExisting ? value.assets.findIndex((item) => item.source?.filename === asset.source?.filename) : -1;
+      if (index >= 0) {
+        const { id, createdAt } = value.assets[index];
+        value.assets[index] = { ...asset, id, createdAt };
+        replaced += 1;
+      } else {
+        value.assets.push(asset);
+        imported += 1;
+      }
+    }
+  });
+  return { project, imported, replaced, errors };
+}
+function remoteExportName(asset) {
+  const data = asset.kind === "character" ? characterData(asset.data) : asset.data;
+  return safeExportName(typeof data.name === "string" && data.name.trim() ? data.name : asset.name);
+}
+function categoryForAsset(asset, presetTarget) {
+  if (asset.kind === "character") return REMOTE_CATEGORIES[0];
+  if (asset.kind === "worldbook") return REMOTE_CATEGORIES[1];
+  const requested = presetTarget ? REMOTE_CATEGORIES.find((value) => value.id === presetTarget && value.kind === "preset") : void 0;
+  if (requested) return requested;
+  return REMOTE_CATEGORIES.find((value) => value.id === (PRESET_FORMAT_CATEGORY[asset.format] ?? "sysprompt"));
+}
+async function exportRemote(store, projectId, assetIds, options = {}) {
+  if (!Array.isArray(assetIds) || !assetIds.length) throw new Error("assetIds \u4E0D\u80FD\u4E3A\u7A7A");
+  if (assetIds.length > MAX_REMOTE_ITEMS) throw new Error(`assetIds \u6700\u591A\u5141\u8BB8 ${MAX_REMOTE_ITEMS} \u9879`);
+  const config = await requireConfig(store.root);
+  const conflict = options.conflict ?? "overwrite";
+  const project = await store.get(projectId);
+  const userDataRoot = resolve(config.userDataRoot);
+  const results = [];
+  for (const assetId of [...new Set(assetIds)]) {
+    const asset = project.assets.find((value) => value.id === assetId);
+    if (!asset) throw new Error(`\u627E\u4E0D\u5230\u8D44\u6E90\uFF1A${assetId}`);
+    const category = categoryForAsset(asset, options.presetTarget);
+    const directory = resolve(userDataRoot, category.directory);
+    const back = relative(userDataRoot, directory);
+    if (!back || back.startsWith("..")) throw new Error(`\u76EE\u6807\u76EE\u5F55\u8D8A\u51FA\u9152\u9986\u6570\u636E\u76EE\u5F55\uFF1A${category.directory}`);
+    const exported = exportAsset(asset, asset.kind === "character" ? "png" : "json");
+    const extension = exported.filename.slice(exported.filename.lastIndexOf("."));
+    const stem = remoteExportName(asset);
+    let filename = `${stem}${extension}`;
+    let status = "written";
+    if (await fileExists(join(directory, filename))) {
+      if (conflict === "skip") {
+        results.push({ assetId, name: asset.name, kind: asset.kind, category: category.id, directory: category.directory, file: `${category.directory}/${filename}`, status: "skipped" });
+        continue;
+      }
+      if (conflict === "rename") {
+        let index = 2;
+        while (await fileExists(join(directory, `${stem} (${index})${extension}`))) index += 1;
+        filename = `${stem} (${index})${extension}`;
+        status = "renamed";
+      } else {
+        status = "overwritten";
+      }
+    }
+    await mkdir(directory, { recursive: true });
+    const temporary = join(directory, `.${randomUUID2()}.tmp`);
+    await writeFile(temporary, exported.bytes, { flag: "wx" });
+    await rename(temporary, join(directory, filename));
+    results.push({ assetId, name: asset.name, kind: asset.kind, category: category.id, directory: category.directory, file: `${category.directory}/${filename}`, status });
+  }
+  return results;
+}
+
 // src/store.ts
-import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { createHash as createHash2, randomUUID as randomUUID3 } from "node:crypto";
+import { mkdir as mkdir2, readFile as readFile2, readdir as readdir2, rename as rename2, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname as dirname2, isAbsolute, join as join2, relative as relative2, resolve as resolve2, sep } from "node:path";
 var SAFE_ID = /^[a-zA-Z0-9-]{1,80}$/;
 function now() {
   return (/* @__PURE__ */ new Date()).toISOString();
@@ -1204,14 +2103,14 @@ function binaryDataUri(value) {
   }
 }
 function resolveDshHome() {
-  return process.env.DSH_HOME || join(homedir(), ".dsh");
+  return process.env.DSH_HOME || join2(homedir(), ".dsh");
 }
 function resolveDataRoot() {
-  return process.env.DSH_STCARDWRITER_DATA || join(resolveDshHome(), "st-card-writer", "projects");
+  return process.env.DSH_STCARDWRITER_DATA || join2(resolveDshHome(), "st-card-writer", "projects");
 }
 function resolveWorkspaceDataRoot(workspacePath) {
   if (!workspacePath || !isAbsolute(workspacePath)) throw new Error("\u9700\u8981\u6709\u6548\u7684 DSH \u5DE5\u4F5C\u533A\u7EDD\u5BF9\u8DEF\u5F84");
-  return join(resolve(workspacePath), ".tavernres", "projects");
+  return join2(resolve2(workspacePath), ".tavernres", "projects");
 }
 function assertId(id) {
   if (!SAFE_ID.test(id)) throw new Error("\u65E0\u6548 ID");
@@ -1229,33 +2128,33 @@ var ProjectStore = class {
     this.root = root;
   }
   async initialize() {
-    await mkdir(this.root, { recursive: true });
+    await mkdir2(this.root, { recursive: true });
   }
   path(id) {
     assertId(id);
-    return join(this.root, `${id}.json`);
+    return join2(this.root, `${id}.json`);
   }
   binaryDirectory(id) {
     assertId(id);
-    return join(this.root, `${id}.assets`);
+    return join2(this.root, `${id}.assets`);
   }
   referencedPath(file) {
-    const root = resolve(this.root);
-    const destination = resolve(root, file.replaceAll("/", sep));
-    const back = relative(root, destination);
+    const root = resolve2(this.root);
+    const destination = resolve2(root, file.replaceAll("/", sep));
+    const back = relative2(root, destination);
     if (!back || back.startsWith("..") || isAbsolute(back)) throw new Error("\u9879\u76EE\u4E8C\u8FDB\u5236\u5F15\u7528\u8D8A\u51FA\u5B58\u50A8\u76EE\u5F55");
     return destination;
   }
   async writeBinary(file, bytes) {
     const destination = this.referencedPath(file);
-    await mkdir(dirname(destination), { recursive: true });
-    const temporary = `${destination}.${randomUUID2()}.tmp`;
-    await writeFile(temporary, bytes, { flag: "wx" });
-    await rename(temporary, destination);
+    await mkdir2(dirname2(destination), { recursive: true });
+    const temporary = `${destination}.${randomUUID3()}.tmp`;
+    await writeFile2(temporary, bytes, { flag: "wx" });
+    await rename2(temporary, destination);
     return { file: file.replaceAll("\\", "/"), bytes: bytes.length, sha256: sha256(bytes) };
   }
   async readBinary(reference) {
-    const bytes = await readFile(this.referencedPath(reference.file));
+    const bytes = await readFile2(this.referencedPath(reference.file));
     if (bytes.length !== reference.bytes || sha256(bytes) !== reference.sha256) throw new Error(`\u9879\u76EE\u4E8C\u8FDB\u5236\u6587\u4EF6\u6821\u9A8C\u5931\u8D25\uFF1A${reference.file}`);
     return bytes;
   }
@@ -1330,10 +2229,10 @@ var ProjectStore = class {
   async persist(project) {
     const persisted = await this.prepareForPersistence(project);
     const destination = this.path(project.id);
-    const temporary = join(this.root, `.${project.id}.${randomUUID2()}.tmp`);
-    await writeFile(temporary, `${JSON.stringify(persisted, null, 2)}
+    const temporary = join2(this.root, `.${project.id}.${randomUUID3()}.tmp`);
+    await writeFile2(temporary, `${JSON.stringify(persisted, null, 2)}
 `, { encoding: "utf8", flag: "wx" });
-    await rename(temporary, destination);
+    await rename2(temporary, destination);
   }
   async serialize(id, task) {
     const prior = this.queues.get(id) ?? Promise.resolve();
@@ -1347,7 +2246,7 @@ var ProjectStore = class {
   }
   async list() {
     await this.initialize();
-    const names = await readdir(this.root);
+    const names = await readdir2(this.root);
     const projects = await Promise.all(names.filter((name) => SAFE_ID.test(name.replace(/\.json$/, "")) && name.endsWith(".json")).map(async (name) => {
       try {
         return await this.get(name.slice(0, -5));
@@ -1369,13 +2268,13 @@ var ProjectStore = class {
     })).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
   async get(id) {
-    const value = JSON.parse(await readFile(this.path(id), "utf8"));
+    const value = JSON.parse(await readFile2(this.path(id), "utf8"));
     validateProject(value);
     return this.hydrate(value);
   }
   async create(name = "\u672A\u547D\u540D\u9152\u9986\u9879\u76EE") {
     const timestamp = now();
-    const project = { id: randomUUID2(), name: name.trim() || "\u672A\u547D\u540D\u9152\u9986\u9879\u76EE", createdAt: timestamp, updatedAt: timestamp, assets: [] };
+    const project = { id: randomUUID3(), name: name.trim() || "\u672A\u547D\u540D\u9152\u9986\u9879\u76EE", createdAt: timestamp, updatedAt: timestamp, assets: [] };
     await this.write(project);
     return clone2(project);
   }
@@ -1402,8 +2301,8 @@ var ProjectStore = class {
   }
   async delete(id) {
     assertId(id);
-    await rm(this.path(id), { force: true });
-    await rm(this.binaryDirectory(id), { recursive: true, force: true });
+    await rm2(this.path(id), { force: true });
+    await rm2(this.binaryDirectory(id), { recursive: true, force: true });
   }
   async addBlankAsset(projectId, kind2, name) {
     return this.update(projectId, (project) => {
@@ -1814,6 +2713,100 @@ function apply(ctx) {
         totalChars: decoded.text.length,
         truncated: end < decoded.text.length,
         nextOffset: end < decoded.text.length ? end : void 0
+      });
+    }
+  }));
+  ctx.tools.register(defineTool({
+    name: "tavern_connect_status",
+    description: "\u67E5\u770B\u9152\u9986\u8FDE\u63A5\u5668\u72B6\u6001\uFF1A\u662F\u5426\u5DF2\u8FDE\u63A5\u672C\u673A SillyTavern\u3001\u7528\u6237\u6570\u636E\u76EE\u5F55\u4F4D\u7F6E\uFF0C\u4EE5\u53CA\u89D2\u8272\u5361\u3001\u4E16\u754C\u4E66\u3001\u4E94\u7C7B\u9884\u8BBE\u7684\u6587\u4EF6\u6570\u91CF\u3002",
+    parameters: { workspacePath: workspaceParameter },
+    output,
+    isConcurrencySafe: () => true,
+    async execute(args) {
+      const store = storeFor(args.workspacePath);
+      const config = await readConnectorConfig(store.root);
+      if (!config) return toolResult({ connected: false, hint: "\u5C1A\u672A\u914D\u7F6E\uFF1B\u4F7F\u7528 tavern_connect_configure \u4F20\u5165\u9152\u9986\u76EE\u5F55" });
+      return toolResult({ connected: true, config, status: await describeConnection(config.userDataRoot) });
+    }
+  }));
+  ctx.tools.register(defineTool({
+    name: "tavern_connect_configure",
+    description: "\u914D\u7F6E\u9152\u9986\u8FDE\u63A5\u5668\uFF1A\u4F20\u5165\u672C\u673A\u9152\u9986\u5B89\u88C5\u6839\u76EE\u5F55\u6216\u7528\u6237\u6570\u636E\u76EE\u5F55\uFF08\u4F8B\u5982 F:\\SillyTavern \u6216 F:\\SillyTavern\\data\\default-user\uFF09\u3002\u591A\u7528\u6237\u9152\u9986\u53EF\u7528 userHandle \u6307\u5B9A\u7528\u6237\uFF0C\u9ED8\u8BA4 default-user\u3002",
+    parameters: {
+      path: { type: "string", required: true, description: "\u9152\u9986\u5B89\u88C5\u6839\u76EE\u5F55\u6216 data/<\u7528\u6237> \u76EE\u5F55\u7684\u7EDD\u5BF9\u8DEF\u5F84" },
+      userHandle: { type: "string", description: "\u591A\u7528\u6237\u573A\u666F\u7684\u7528\u6237\u76EE\u5F55\u540D\uFF1B\u7701\u7565\u65F6\u81EA\u52A8\u9009\u62E9 default-user" },
+      workspacePath: workspaceParameter
+    },
+    output,
+    async execute(args) {
+      const store = storeFor(args.workspacePath);
+      const saved = await saveConnector(store.root, args.path, args.userHandle);
+      return toolResult({ connected: true, config: saved.config, status: saved.status });
+    }
+  }));
+  ctx.tools.register(defineTool({
+    name: "tavern_remote_list",
+    description: "\u5217\u51FA\u9152\u9986\u4FA7\u7684\u89D2\u8272\u5361\u3001\u4E16\u754C\u4E66\u548C\u9884\u8BBE\u6587\u4EF6\u6E05\u5355\u3002entries \u4E2D\u7684 file \u662F\u76F8\u5BF9\u7528\u6237\u6570\u636E\u76EE\u5F55\u7684\u8DEF\u5F84\uFF0C\u4F9B tavern_remote_import \u4F7F\u7528\u3002",
+    parameters: {
+      kind: { type: "string", enum: ["character", "worldbook", "preset"], description: "\u6309\u8D44\u4EA7\u7C7B\u578B\u8FC7\u6EE4\uFF1B\u7701\u7565\u8FD4\u56DE\u5168\u90E8" },
+      offset: { type: "number", description: "\u8D77\u59CB\u4E0B\u6807\uFF0C\u9ED8\u8BA4 0" },
+      limit: { type: "number", description: "\u8FD4\u56DE\u6761\u6570\uFF0C\u9ED8\u8BA4 50\u3001\u4E0A\u9650 200" },
+      workspacePath: workspaceParameter
+    },
+    output,
+    isConcurrencySafe: () => true,
+    async execute(args) {
+      const store = storeFor(args.workspacePath);
+      const entries = await listRemote(store.root, args.kind === "character" || args.kind === "worldbook" || args.kind === "preset" ? args.kind : void 0);
+      const offset = Math.max(0, Math.floor(args.offset ?? 0));
+      const limit = Math.max(1, Math.min(200, Math.floor(args.limit ?? 50)));
+      const page = entries.slice(offset, offset + limit);
+      return toolResult({
+        total: entries.length,
+        offset,
+        limit,
+        entries: page.map((entry) => ({ category: entry.category, kind: entry.kind, name: entry.name, file: entry.file, bytes: entry.bytes })),
+        hasMore: offset + page.length < entries.length,
+        nextOffset: offset + page.length < entries.length ? offset + page.length : void 0
+      });
+    }
+  }));
+  ctx.tools.register(defineTool({
+    name: "tavern_remote_import",
+    description: "\u628A\u9152\u9986\u4FA7\u7684\u89D2\u8272\u5361\u3001\u4E16\u754C\u4E66\u6216\u9884\u8BBE\u6587\u4EF6\u5BFC\u5165\u5F53\u524D\u9879\u76EE\u3002\u9ED8\u8BA4\u540C\u4E00\u9152\u9986\u6587\u4EF6\u91CD\u590D\u5BFC\u5165\u65F6\u66FF\u6362\u9879\u76EE\u5185\u65E2\u6709\u8D44\u6E90\uFF08\u4FDD\u7559\u8D44\u6E90 ID\uFF09\uFF0Cmode=add \u5219\u603B\u662F\u65B0\u589E\u3002",
+    parameters: {
+      projectId: { type: "string", required: true },
+      files: { type: "json", required: true, description: 'tavern_remote_list \u8FD4\u56DE\u7684\u76F8\u5BF9\u8DEF\u5F84\u6570\u7EC4\uFF0C\u5982 ["characters/\u6797\u9701.png","worlds/\u57CE\u9547.json"]' },
+      mode: { type: "string", enum: ["replace", "add"], description: "\u540C\u4E00\u6587\u4EF6\u91CD\u590D\u5BFC\u5165\u65F6\u66FF\u6362\u65E2\u6709\u8D44\u6E90\u8FD8\u662F\u65B0\u589E\u526F\u672C\uFF0C\u9ED8\u8BA4 replace" },
+      workspacePath: workspaceParameter
+    },
+    output,
+    async execute(args) {
+      const files = stringList(args.files, "files", 500);
+      const result = await importRemote(storeFor(args.workspacePath), args.projectId, files, { replaceExisting: args.mode !== "add" });
+      return projectResult(result.project, { imported: result.imported, replaced: result.replaced, errors: result.errors });
+    }
+  }));
+  ctx.tools.register(defineTool({
+    name: "tavern_remote_export",
+    description: "\u628A\u9879\u76EE\u8D44\u6E90\u5199\u5165\u9152\u9986\uFF1A\u89D2\u8272\u5361\u5BFC\u51FA\u4E3A PNG \u5230 characters/\uFF0C\u4E16\u754C\u4E66\u5230 worlds/\uFF0C\u9884\u8BBE\u6309\u683C\u5F0F\u5230 OpenAI Settings\u3001TextGen Settings\u3001context\u3001instruct \u6216 sysprompt\u3002\u5BFC\u51FA\u540E\u5728\u9152\u9986\u754C\u9762\u5237\u65B0\u5373\u53EF\u770B\u5230\u3002",
+    parameters: {
+      projectId: { type: "string", required: true },
+      assetIds: { type: "json", required: true, description: "\u8981\u5BFC\u51FA\u7684\u8D44\u6E90 ID \u6570\u7EC4" },
+      conflict: { type: "string", enum: ["overwrite", "rename", "skip"], description: "\u9152\u9986\u4FA7\u540C\u540D\u6587\u4EF6\u51B2\u7A81\u7B56\u7565\uFF0C\u9ED8\u8BA4 overwrite" },
+      presetTarget: { type: "string", enum: [...REMOTE_PRESET_CATEGORY_IDS], description: "\u9884\u8BBE\u76EE\u6807\u76EE\u5F55\uFF1B\u9ED8\u8BA4\u6309\u683C\u5F0F\u81EA\u52A8\u5224\u65AD\uFF0C\u65E0\u6CD5\u5224\u65AD\u65F6\u5199\u5165 sysprompt" },
+      workspacePath: workspaceParameter
+    },
+    output,
+    async execute(args) {
+      const assetIds = stringList(args.assetIds, "assetIds", 500);
+      const conflict = args.conflict ?? "overwrite";
+      const presetTarget = args.presetTarget && REMOTE_PRESET_CATEGORY_IDS.includes(args.presetTarget) ? args.presetTarget : void 0;
+      const results = await exportRemote(storeFor(args.workspacePath), args.projectId, assetIds, { conflict, presetTarget });
+      return toolResult({
+        results,
+        written: results.filter((value) => value.status !== "skipped").length,
+        skipped: results.filter((value) => value.status === "skipped").length
       });
     }
   }));

@@ -557,6 +557,173 @@ function HarnessPanel({ workspacePath, project, asset }) {
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "stcw-hint", children: harnessBridge ? `\u5DF2\u8FDE\u63A5\u5F53\u524D Harness \u4F1A\u8BDD \xB7 \u8D44\u6E90\u5B58\u50A8\u4E8E ${workspacePath}\\.tavernres` : "\u5F53\u524D\u6CA1\u6709\u53EF\u8FDE\u63A5\u7684 Harness \u4F1A\u8BDD\uFF1B\u4ECD\u53EF\u624B\u52A8\u7F16\u8F91\u8D44\u6E90\uFF0C\u6216\u5148\u5728\u8BE5\u5DE5\u4F5C\u533A\u65B0\u5EFA\u4F1A\u8BDD\u3002" })
   ] });
 }
+function errorText(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function PresetPlusPanel() {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "stcw-connector stcw-presetplus", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-panel-title", children: "Preset Plus \u9884\u8BBE\u6CE8\u5165" }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "stcw-hint", children: "\u5F53\u524D\u201C\u9152\u9986\u521B\u4F5C\u6A21\u5F0F\u201D\u5DF2\u52A0\u5165 Preset Plus \u4F5C\u7528\u57DF\uFF0C\u4F1A\u5E94\u7528\u5176\u5F53\u524D\u6FC0\u6D3B\u9884\u8BBE\u3002\u9884\u8BBE\u5185\u5BB9\u3001\u542F\u7528\u72B6\u6001\u4E0E\u4F2A\u88C5\u6D88\u606F\u7EDF\u4E00\u5728 DSH \u8BBE\u7F6E\u91CC\u7684\u201C\u9884\u8BBE\u589E\u5F3A\u201D\u7BA1\u7406\u3002" })
+  ] });
+}
+function ConnectorPanel({ project, accept, notice }) {
+  const [info, setInfo] = (0, import_react.useState)(null);
+  const [draft, setDraft] = (0, import_react.useState)("");
+  const [probe, setProbe] = (0, import_react.useState)(null);
+  const [entries, setEntries] = (0, import_react.useState)([]);
+  const [selected, setSelected] = (0, import_react.useState)(/* @__PURE__ */ new Set());
+  const [busy, setBusy] = (0, import_react.useState)(false);
+  const [conflict, setConflict] = (0, import_react.useState)("overwrite");
+  const load = async () => {
+    const result = await api("/connector");
+    setInfo(result);
+    setProbe(null);
+    if (result.connected) setEntries((await api("/connector/remote")).entries);
+    else setEntries([]);
+  };
+  (0, import_react.useEffect)(() => {
+    setInfo(null);
+    setSelected(/* @__PURE__ */ new Set());
+    if (project?.id) void load().catch((error) => notice(error.message));
+  }, [project?.id]);
+  if (!info) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "stcw-connector", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-panel-title", children: "\u9152\u9986\u8FDE\u63A5\u5668" }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "stcw-hint", children: "\u52A0\u8F7D\u4E2D\u2026" })
+  ] });
+  const toggle = (file, checked) => setSelected((current) => {
+    const next = new Set(current);
+    if (checked) next.add(file);
+    else next.delete(file);
+    return next;
+  });
+  const doProbe = async () => {
+    try {
+      setProbe(null);
+      setProbe((await api("/connector/probe", { method: "POST", body: JSON.stringify({ path: draft }) })).probe);
+    } catch (error) {
+      notice(errorText(error));
+    }
+  };
+  const doSave = async () => {
+    try {
+      await api("/connector", { method: "PUT", body: JSON.stringify({ path: draft, userHandle: probe?.userHandle }) });
+      setSelected(/* @__PURE__ */ new Set());
+      await load();
+    } catch (error) {
+      notice(errorText(error));
+    }
+  };
+  const disconnect = async () => {
+    if (!confirm("\u65AD\u5F00\u9152\u9986\u8FDE\u63A5\uFF1F\u9879\u76EE\u6570\u636E\u4E0D\u53D7\u5F71\u54CD\u3002")) return;
+    try {
+      await api("/connector", { method: "DELETE" });
+      await load();
+      notice("\u5DF2\u65AD\u5F00\u9152\u9986\u8FDE\u63A5");
+    } catch (error) {
+      notice(errorText(error));
+    }
+  };
+  const importFiles = async (files) => {
+    setBusy(true);
+    try {
+      const result = await api("/connector/import", { method: "POST", body: JSON.stringify({ projectId: project.id, files }) });
+      accept(result.project);
+      setSelected(/* @__PURE__ */ new Set());
+      notice(`\u4ECE\u9152\u9986\u5BFC\u5165 ${result.imported} \u9879${result.replaced ? `\uFF0C\u66FF\u6362 ${result.replaced} \u9879` : ""}${result.errors.length ? `\uFF0C${result.errors.length} \u9879\u5931\u8D25` : ""}`);
+    } catch (error) {
+      notice(errorText(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const exportAll = async () => {
+    if (!project.assets.length) return;
+    if (!confirm(`\u628A\u9879\u76EE\u201C${project.name}\u201D\u7684\u5168\u90E8 ${project.assets.length} \u9879\u8D44\u6E90\u5BFC\u51FA\u5230\u9152\u9986\uFF1F\u51B2\u7A81\u7B56\u7565\uFF1A${conflict === "overwrite" ? "\u540C\u540D\u8986\u76D6" : conflict === "rename" ? "\u540C\u540D\u6539\u540D" : "\u540C\u540D\u8DF3\u8FC7"}\u3002`)) return;
+    setBusy(true);
+    try {
+      const result = await api("/connector/export", { method: "POST", body: JSON.stringify({ projectId: project.id, assetIds: project.assets.map((value) => value.id), conflict }) });
+      const counts = result.results.reduce((all, item) => ({ ...all, [item.status]: (all[item.status] ?? 0) + 1 }), {});
+      notice(`\u5DF2\u5BFC\u51FA\u5230\u9152\u9986\uFF1A${Object.entries(counts).map(([key, value]) => `${value} ${key}`).join("\u3001")}\u3002\u5728\u9152\u9986\u4E2D\u5237\u65B0\u5373\u53EF\u770B\u5230`);
+    } catch (error) {
+      notice(errorText(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "stcw-connector", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-panel-title", children: "\u9152\u9986\u8FDE\u63A5\u5668" }),
+    !info.connected ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "stcw-hint", children: "\u586B\u5165\u672C\u673A\u9152\u9986\u5B89\u88C5\u6839\u76EE\u5F55\u6216\u7528\u6237\u6570\u636E\u76EE\u5F55\uFF0C\u5373\u53EF\u4E92\u5BFC\u89D2\u8272\u5361\u3001\u4E16\u754C\u4E66\u548C\u9884\u8BBE\u3002" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-row", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { value: draft, placeholder: "\u4F8B\u5982 F:\\SillyTavern", onChange: (event) => setDraft(event.target.value) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { disabled: !draft.trim(), onClick: () => void doProbe(), children: "\u63A2\u6D4B" })
+      ] }),
+      probe && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-probe-result", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: probe.type === "unknown" ? "stcw-probe-error" : "stcw-safe-note", children: probe.message }),
+        probe.type === "install-root" && probe.userHandles.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { className: "stcw-field", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "\u9152\u9986\u7528\u6237" }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", { value: probe.userHandle, onChange: (event) => setProbe({ ...probe, userHandle: event.target.value }), children: probe.userHandles.map((handle) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: handle, children: handle }, handle)) })
+        ] }),
+        probe.type !== "unknown" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-cat-badges", children: probe.status?.categories.map((category) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: category.exists ? "ok" : "", title: category.directory, children: [
+          category.directory,
+          " ",
+          category.count
+        ] }, category.id)) }),
+        probe.type !== "unknown" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "primary", onClick: () => void doSave(), children: "\u4FDD\u5B58\u8FDE\u63A5" })
+      ] })
+    ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-cat-badges", children: info.status?.categories.map((category) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: category.exists ? "ok" : "", title: category.directory, children: [
+        category.directory,
+        " ",
+        category.count
+      ] }, category.id)) }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { className: "stcw-hint", title: info.config.userDataRoot, children: [
+        "\u5DF2\u8FDE\u63A5 ",
+        info.config.userHandle || "\u7528\u6237\u6570\u636E\u76EE\u5F55",
+        " \xB7 \u5BFC\u51FA\u540E\u5728\u9152\u9986\u4E2D\u5237\u65B0\u5373\u53EF\u770B\u5230"
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-row", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: () => void load().catch((error) => notice(error.message)), children: "\u5237\u65B0" }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", { value: conflict, title: "\u5BFC\u51FA\u540C\u540D\u51B2\u7A81\u7B56\u7565", onChange: (event) => setConflict(event.target.value), children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "overwrite", children: "\u540C\u540D\u8986\u76D6" }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "rename", children: "\u540C\u540D\u6539\u540D" }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "skip", children: "\u540C\u540D\u8DF3\u8FC7" })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { disabled: busy || !project.assets.length, onClick: () => void exportAll(), children: "\u5168\u90E8\u5BFC\u51FA\u5230\u9152\u9986" })
+      ] }),
+      info.status?.categories.filter((category) => category.exists).map((category) => {
+        const list = entries.filter((entry) => entry.category === category.id);
+        const allSelected = list.length > 0 && list.every((entry) => selected.has(entry.file));
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", { className: "stcw-remote-group", open: category.id === "characters", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: [
+            category.directory,
+            "\uFF08",
+            list.length,
+            "\uFF09"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { className: "stcw-remote-all", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: allSelected, onChange: (event) => {
+              for (const entry of list) toggle(entry.file, event.target.checked);
+            } }),
+            "\u5168\u9009"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-remote-list", children: list.map((entry) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: selected.has(entry.file), onChange: (event) => toggle(entry.file, event.target.checked) }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: entry.name }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("small", { children: [
+                Math.max(1, Math.ceil(entry.bytes / 1024)),
+                " KiB"
+              ] })
+            ] })
+          ] }, entry.file)) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { disabled: busy || !list.some((entry) => selected.has(entry.file)), onClick: () => void importFiles(list.filter((entry) => selected.has(entry.file)).map((entry) => entry.file)), children: "\u5BFC\u5165\u6240\u9009\u5230\u9879\u76EE" })
+        ] }, category.id);
+      }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "danger", onClick: () => void disconnect(), children: "\u65AD\u5F00\u8FDE\u63A5" })
+    ] })
+  ] });
+}
 function Workbench(props) {
   const isOpen = (0, import_react.useSyncExternalStore)(subscribe, () => opened);
   const currentWorkspace = props.useSessions((state) => state.current ? state.byId[state.current]?.cwd : void 0);
@@ -664,6 +831,13 @@ function Workbench(props) {
     acceptProject(result.project);
     setSelectedId(result.project.assets[0]?.id || "");
   };
+  const exportToTavern = async () => {
+    if (!project || !asset) return;
+    if (!confirm(`\u628A\u201C${asset.name}\u201D\u5BFC\u51FA\u5230\u9152\u9986\uFF1F\u540C\u540D\u6587\u4EF6\u5C06\u88AB\u8986\u76D6\u3002`)) return;
+    const result = await api("/connector/export", { method: "POST", body: JSON.stringify({ projectId: project.id, assetIds: [asset.id] }) });
+    const item = result.results[0];
+    setNotice(`\u5DF2${item.status === "overwritten" ? "\u8986\u76D6" : "\u5199\u5165"}\u9152\u9986 ${item.file}\uFF1B\u5728\u9152\u9986\u4E2D\u5237\u65B0\u5373\u53EF\u770B\u5230`);
+  };
   const deleteProject = async () => {
     if (!project || !confirm(`\u5220\u9664\u9879\u76EE\u201C${project.name}\u201D\u53CA\u5176\u4E2D\u5168\u90E8\u8D44\u6E90\uFF1F`)) return;
     await api(`/projects/${project.id}`, { method: "DELETE" });
@@ -711,6 +885,7 @@ function Workbench(props) {
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: () => void add("worldbook"), children: "\uFF0B\u4E16\u754C\u4E66" }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: () => void add("preset"), children: "\uFF0B\u9884\u8BBE" }),
         asset ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", { className: "stcw-button", title: `\u5BFC\u51FA\u201C${asset.name}\u201D`, href: downloadUrl(`/projects/${project.id}/assets/${asset.id}/export?format=${asset.kind === "character" ? asset.source?.container === "charx" ? "charx" : "png" : "json"}`), children: "\u5BFC\u51FA\u5F53\u524D\u8D44\u6E90" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "stcw-button disabled", title: "\u8BF7\u5148\u9009\u62E9\u8D44\u6E90", children: "\u5BFC\u51FA\u5F53\u524D\u8D44\u6E90" }),
+        asset && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { title: "\u901A\u8FC7\u9152\u9986\u8FDE\u63A5\u5668\u5199\u5165\u672C\u673A SillyTavern", onClick: () => void exportToTavern().catch((error) => setNotice(error.message)), children: "\u5BFC\u51FA\u5230\u9152\u9986" }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", { className: "stcw-button", href: downloadUrl(`/projects/${project.id}/export`), children: "\u5BFC\u51FA\u5168\u90E8\u8D44\u6E90 ZIP" }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "danger", onClick: () => void deleteProject(), children: "\u5220\u9664\u9879\u76EE" }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "stcw-notice", children: notice })
@@ -718,6 +893,8 @@ function Workbench(props) {
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", { className: "stcw-studio", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", { className: "stcw-ai-pane", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HarnessPanel, { workspacePath, project, asset }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PresetPlusPanel, {}),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectorPanel, { project, accept: acceptProject, notice: setNotice }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-panel-title", children: "\u9879\u76EE\u8D44\u6E90" }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-assets", children: project.assets.length ? project.assets.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", { className: item.id === asset?.id ? "active" : "", onClick: () => setSelectedId(item.id), children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: item.kind === "character" ? "\u89D2\u8272" : item.kind === "worldbook" ? "\u4E16\u754C" : "\u9884\u8BBE" }),
@@ -774,7 +951,7 @@ var CSS = `
 .stcw-layer{position:fixed;inset:0;z-index:10000;background:rgba(8,7,12,.7);backdrop-filter:blur(8px);pointer-events:auto;padding:20px;color:#eee;font:14px/1.45 Inter,system-ui,sans-serif}.stcw-workbench{height:100%;display:flex;flex-direction:column;background:#15121d;border:1px solid #3a3347;border-radius:16px;box-shadow:0 24px 80px #0009;overflow:hidden}.stcw-workbench header{height:58px;padding:0 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #302a3a;background:#1c1825}.stcw-workbench header>div{display:flex;align-items:center;gap:12px}.stcw-workbench button,.stcw-button,.stcw-file{border:1px solid #51475f;background:#282232;color:#eee;padding:7px 10px;border-radius:7px;cursor:pointer;text-decoration:none}.stcw-workbench button:hover,.stcw-button:hover,.stcw-file:hover{background:#373043}.stcw-button.disabled{opacity:.45;cursor:not-allowed;pointer-events:none}.stcw-workbench button.danger{border-color:#7a3f4b;color:#ffabb8}.stcw-close{font-size:24px!important;line-height:1;padding:5px 10px!important}.stcw-workbench select,.stcw-workbench input,.stcw-workbench textarea{background:#100e16;color:#eee;border:1px solid #463d52;border-radius:6px;padding:8px;box-sizing:border-box}.stcw-file input{display:none}.stcw-toolbar{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid #302a3a;overflow-x:auto}.stcw-project-name{font-weight:700;width:220px;flex:0 0 auto}.stcw-notice{color:#b9a7cf;margin-left:auto;white-space:nowrap}.stcw-columns{display:grid;grid-template-columns:230px minmax(420px,1fr) 360px;min-height:0;flex:1}.stcw-assets,.stcw-editor,.stcw-preview{min-height:0;overflow:auto}.stcw-assets{padding:9px;border-right:1px solid #302a3a}.stcw-assets>button{display:grid;width:100%;text-align:left;margin-bottom:7px;grid-template-columns:auto 1fr;gap:2px 8px}.stcw-assets>button>span{grid-row:1/3;background:#493c5b;color:#d8c8ec;font-size:11px;padding:3px 5px;border-radius:4px;align-self:center}.stcw-assets small,.stcw-entry-list small{color:#9d91a9}.stcw-assets .active,.stcw-entry-list .active{border-color:#9b75ce;background:#392c4a}.stcw-editor{padding:14px}.stcw-editor-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:14px;position:sticky;top:-14px;background:#15121ded;padding:10px 0;z-index:2}.stcw-editor-head>div{display:flex;gap:7px;align-items:center}.stcw-editor-head input{font-size:18px;font-weight:700}.stcw-form{display:flex;flex-direction:column;gap:10px}.stcw-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.stcw-field{display:flex;flex-direction:column;gap:5px}.stcw-field>span{color:#bcaec9;font-size:12px}.stcw-field textarea{width:100%;resize:vertical}.stcw-world-editor{display:grid;grid-template-columns:180px 1fr;gap:12px}.stcw-entry-list{display:flex;flex-direction:column;gap:6px;max-height:68vh;overflow:auto}.stcw-entry-list>button{display:flex;flex-direction:column;text-align:left}.stcw-entry-form{display:flex;flex-direction:column;gap:10px}.stcw-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.stcw-checks{display:flex;gap:14px;flex-wrap:wrap}.stcw-checks label{display:flex;align-items:center;gap:5px}.stcw-raw{margin-top:18px;border-top:1px solid #342d3e;padding-top:12px}.stcw-raw summary{cursor:pointer;color:#bda5d8}.stcw-raw textarea{width:100%;font:12px/1.45 ui-monospace,monospace;margin-top:8px}.stcw-preview{border-left:1px solid #302a3a;background:#100e16;padding:15px}.stcw-preview-title{text-transform:uppercase;letter-spacing:.14em;font-size:11px;color:#a28eaf;margin-bottom:12px}.stcw-preview pre{white-space:pre-wrap;word-break:break-word;font:13px/1.55 inherit}.stcw-avatar{width:72px;height:72px;border-radius:50%;display:grid;place-items:center;margin:10px auto;background:linear-gradient(135deg,#9a67cc,#4d78bd);font-size:30px}.stcw-preview-card h2{text-align:center}.stcw-tags{display:flex;justify-content:center;flex-wrap:wrap;gap:5px}.stcw-tags span{background:#332740;padding:3px 7px;border-radius:20px;font-size:11px}.stcw-lore-hit,.stcw-prompt{border:1px solid #3b3247;border-radius:8px;padding:10px;margin:9px 0;background:#191520}.stcw-lore-hit small{display:block;color:#a795b7}.stcw-prompt>div{display:flex;justify-content:space-between}.stcw-prompt span{color:#a795b7}.stcw-preview-note,.stcw-hint{color:#a99ab7;font-size:12px}.stcw-empty,.stcw-welcome{display:grid;place-content:center;text-align:center;color:#9f93aa;min-height:180px}.stcw-welcome{flex:1}.stcw-welcome button{justify-self:center}@media(max-width:1050px){.stcw-columns{grid-template-columns:180px minmax(380px,1fr) 300px}}`;
 var EXTRA_CSS = `
 .stcw-composer-button{border:0;background:transparent;color:inherit;padding:4px 7px;border-radius:6px;cursor:pointer}.stcw-composer-button:hover{background:color-mix(in srgb,currentColor 10%,transparent)}
-.stcw-studio{display:grid;grid-template-columns:330px minmax(0,1fr);min-height:0;flex:1}.stcw-ai-pane{min-height:0;overflow:auto;padding:12px;border-right:1px solid #302a3a;background:#121019}.stcw-resource-pane{min-width:0;min-height:0}.stcw-resource-grid{height:100%;display:grid;grid-template-columns:minmax(480px,1fr) minmax(300px,36%);min-height:0}.stcw-panel-title{text-transform:uppercase;letter-spacing:.12em;font-size:11px;color:#aa95ba;margin:3px 0 9px}.stcw-harness{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-harness textarea{width:100%;resize:vertical}.stcw-harness-actions{display:flex;gap:7px;margin-top:8px}.stcw-harness-actions button{flex:1}.stcw-workbench button.primary{background:#694697;border-color:#9367c8}.stcw-workbench button:disabled{opacity:.45;cursor:not-allowed}.stcw-ai-pane>.stcw-assets{border:0;padding:0;max-height:35vh;overflow:auto}.stcw-migrate{margin-top:12px;border-top:1px solid #302a3a;padding-top:10px}.stcw-migrate summary,.stcw-resources summary{cursor:pointer;color:#ccb5e6;font-weight:700;margin-bottom:9px}.stcw-migrate-list{max-height:190px;overflow:auto;margin:8px 0}.stcw-migrate-list label{display:flex;gap:7px;padding:6px;border-radius:6px}.stcw-migrate-list label:hover{background:#211b29}.stcw-migrate-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-migrate-list small{color:#9e90aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-safe-note{color:#aee6c1;background:#153421;padding:7px;border-radius:6px;font-size:12px}.stcw-resources{border:1px solid #3d3548;border-radius:8px;padding:9px;margin-bottom:12px}.stcw-resource-badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px}.stcw-resource-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-resource-badges span.ok{background:#16422a;color:#aee6c1}.stcw-resource-row{display:grid;grid-template-columns:minmax(100px,1fr) auto;gap:2px 8px;padding:6px;border-top:1px solid #2e2736}.stcw-resource-row code{grid-column:1/3;color:#9f90ae;word-break:break-all}.stcw-resource-row em{grid-column:1/3;color:#ffafba}.stcw-workbench header small{color:#998ca5;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}@media(max-width:1150px){.stcw-studio{grid-template-columns:285px minmax(0,1fr)}.stcw-resource-grid{grid-template-columns:minmax(420px,1fr) 300px}}`;
+.stcw-studio{display:grid;grid-template-columns:330px minmax(0,1fr);min-height:0;flex:1}.stcw-ai-pane{min-height:0;overflow:auto;padding:12px;border-right:1px solid #302a3a;background:#121019}.stcw-resource-pane{min-width:0;min-height:0}.stcw-resource-grid{height:100%;display:grid;grid-template-columns:minmax(480px,1fr) minmax(300px,36%);min-height:0}.stcw-panel-title{text-transform:uppercase;letter-spacing:.12em;font-size:11px;color:#aa95ba;margin:3px 0 9px}.stcw-harness{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-harness textarea{width:100%;resize:vertical}.stcw-harness-actions{display:flex;gap:7px;margin-top:8px}.stcw-harness-actions button{flex:1}.stcw-workbench button.primary{background:#694697;border-color:#9367c8}.stcw-workbench button:disabled{opacity:.45;cursor:not-allowed}.stcw-ai-pane>.stcw-assets{border:0;padding:0;max-height:35vh;overflow:auto}.stcw-migrate{margin-top:12px;border-top:1px solid #302a3a;padding-top:10px}.stcw-migrate summary,.stcw-resources summary{cursor:pointer;color:#ccb5e6;font-weight:700;margin-bottom:9px}.stcw-migrate-list{max-height:190px;overflow:auto;margin:8px 0}.stcw-migrate-list label{display:flex;gap:7px;padding:6px;border-radius:6px}.stcw-migrate-list label:hover{background:#211b29}.stcw-migrate-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-migrate-list small{color:#9e90aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-safe-note{color:#aee6c1;background:#153421;padding:7px;border-radius:6px;font-size:12px}.stcw-resources{border:1px solid #3d3548;border-radius:8px;padding:9px;margin-bottom:12px}.stcw-resource-badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px}.stcw-resource-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-resource-badges span.ok{background:#16422a;color:#aee6c1}.stcw-resource-row{display:grid;grid-template-columns:minmax(100px,1fr) auto;gap:2px 8px;padding:6px;border-top:1px solid #2e2736}.stcw-resource-row code{grid-column:1/3;color:#9f90ae;word-break:break-all}.stcw-resource-row em{grid-column:1/3;color:#ffafba}.stcw-workbench header small{color:#998ca5;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-connector{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-connector summary{cursor:pointer;color:#ccb5e6;font-weight:700}.stcw-connector input:not([type=checkbox]){width:100%}.stcw-connector .stcw-row{margin:8px 0;gap:6px}.stcw-connector .stcw-row input{flex:1}.stcw-connector .stcw-row select{flex:0 0 auto}.stcw-connector button{margin-top:4px}.stcw-connector button.danger{margin-top:10px}.stcw-probe-result{margin-top:9px;display:flex;flex-direction:column;gap:7px}.stcw-probe-error{color:#ffafba;background:#3a1b22;padding:7px;border-radius:6px;font-size:12px}.stcw-cat-badges{display:flex;gap:5px;flex-wrap:wrap;margin:4px 0}.stcw-cat-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-cat-badges span.ok{background:#16422a;color:#aee6c1}.stcw-remote-group{margin-top:8px;border-top:1px solid #302a3a;padding-top:7px}.stcw-remote-group summary{font-weight:600;color:#c9b6de;cursor:pointer}.stcw-remote-all{display:flex;gap:7px;align-items:center;margin:5px 0}.stcw-remote-list{max-height:190px;overflow:auto;margin:4px 0}.stcw-remote-list label{display:flex;gap:7px;align-items:center;padding:4px 5px;border-radius:6px}.stcw-remote-list label:hover{background:#211b29}.stcw-remote-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-remote-list label b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-remote-list small{color:#9e90aa}.stcw-dshprompt{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-dshprompt .stcw-field{margin:9px 0}.stcw-dshprompt textarea{width:100%;resize:vertical}.stcw-dshprompt .stcw-row{margin-top:9px}.stcw-dshprompt .stcw-row .stcw-hint{flex:1}@media(max-width:1150px){.stcw-studio{grid-template-columns:285px minmax(0,1fr)}.stcw-resource-grid{grid-template-columns:minmax(420px,1fr) 300px}}`;
 var EMBEDDED_CSS = `.stcw-embedded-book{margin-top:18px;border:1px solid #493b57;border-radius:9px;padding:10px}.stcw-embedded-book>summary{cursor:pointer;color:#d1b6ea;font-weight:700}.stcw-embedded-book>.stcw-world-editor{margin-top:12px}.stcw-embedded-preview{margin-top:14px;border-top:1px solid #342d3e;padding-top:10px}`;
 function installStyle() {
   const style = document.createElement("style");

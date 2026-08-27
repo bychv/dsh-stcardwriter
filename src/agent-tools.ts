@@ -1,5 +1,10 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
+  describeConnection, exportRemote, importRemote, listRemote, readConnectorConfig, saveConnector,
+  REMOTE_PRESET_CATEGORY_IDS,
+} from './connector.js'
+import type { RemoteCategoryId, RemoteConflictPolicy } from './connector.js'
+import {
   assetForAgent, assetSummaryForAgent, copyWorldbookEntries, createAsset, deleteWorldbookEntry, isObject,
   patchCharacterFields, projectForAgent, projectManifestForAgent, readCharacterTextResource, selectedAssetFieldsForAgent,
   toLosslessJson, upsertWorldbookEntry, worldbookEntryRecords,
@@ -343,6 +348,93 @@ export function apply(ctx: ToolContext): void {
         resource: { resourceId: decoded.resourceId, path: decoded.path, mimeType: decoded.mimeType, encoding: decoded.encoding, source: decoded.source },
         text: decoded.text.slice(offset, end), offset, totalChars: decoded.text.length,
         truncated: end < decoded.text.length, nextOffset: end < decoded.text.length ? end : undefined,
+      })
+    },
+  }))
+  ctx.tools.register(defineTool({
+    name: 'tavern_connect_status',
+    description: '查看酒馆连接器状态：是否已连接本机 SillyTavern、用户数据目录位置，以及角色卡、世界书、五类预设的文件数量。',
+    parameters: { workspacePath: workspaceParameter }, output,
+    isConcurrencySafe: () => true,
+    async execute(args: { workspacePath?: string }) {
+      const store = storeFor(args.workspacePath)
+      const config = await readConnectorConfig(store.root)
+      if (!config) return toolResult({ connected: false, hint: '尚未配置；使用 tavern_connect_configure 传入酒馆目录' })
+      return toolResult({ connected: true, config, status: await describeConnection(config.userDataRoot) })
+    },
+  }))
+  ctx.tools.register(defineTool({
+    name: 'tavern_connect_configure',
+    description: '配置酒馆连接器：传入本机酒馆安装根目录或用户数据目录（例如 F:\\SillyTavern 或 F:\\SillyTavern\\data\\default-user）。多用户酒馆可用 userHandle 指定用户，默认 default-user。',
+    parameters: {
+      path: { type: 'string', required: true, description: '酒馆安装根目录或 data/<用户> 目录的绝对路径' },
+      userHandle: { type: 'string', description: '多用户场景的用户目录名；省略时自动选择 default-user' },
+      workspacePath: workspaceParameter,
+    }, output,
+    async execute(args: { path: string; userHandle?: string; workspacePath?: string }) {
+      const store = storeFor(args.workspacePath)
+      const saved = await saveConnector(store.root, args.path, args.userHandle)
+      return toolResult({ connected: true, config: saved.config, status: saved.status })
+    },
+  }))
+  ctx.tools.register(defineTool({
+    name: 'tavern_remote_list',
+    description: '列出酒馆侧的角色卡、世界书和预设文件清单。entries 中的 file 是相对用户数据目录的路径，供 tavern_remote_import 使用。',
+    parameters: {
+      kind: { type: 'string', enum: ['character', 'worldbook', 'preset'], description: '按资产类型过滤；省略返回全部' },
+      offset: { type: 'number', description: '起始下标，默认 0' },
+      limit: { type: 'number', description: '返回条数，默认 50、上限 200' },
+      workspacePath: workspaceParameter,
+    }, output,
+    isConcurrencySafe: () => true,
+    async execute(args: { kind?: string; offset?: number; limit?: number; workspacePath?: string }) {
+      const store = storeFor(args.workspacePath)
+      const entries = await listRemote(store.root, args.kind === 'character' || args.kind === 'worldbook' || args.kind === 'preset' ? args.kind : undefined)
+      const offset = Math.max(0, Math.floor(args.offset ?? 0))
+      const limit = Math.max(1, Math.min(200, Math.floor(args.limit ?? 50)))
+      const page = entries.slice(offset, offset + limit)
+      return toolResult({
+        total: entries.length, offset, limit,
+        entries: page.map(entry => ({ category: entry.category, kind: entry.kind, name: entry.name, file: entry.file, bytes: entry.bytes })),
+        hasMore: offset + page.length < entries.length,
+        nextOffset: offset + page.length < entries.length ? offset + page.length : undefined,
+      })
+    },
+  }))
+  ctx.tools.register(defineTool({
+    name: 'tavern_remote_import',
+    description: '把酒馆侧的角色卡、世界书或预设文件导入当前项目。默认同一酒馆文件重复导入时替换项目内既有资源（保留资源 ID），mode=add 则总是新增。',
+    parameters: {
+      projectId: { type: 'string', required: true },
+      files: { type: 'json', required: true, description: 'tavern_remote_list 返回的相对路径数组，如 ["characters/林霁.png","worlds/城镇.json"]' },
+      mode: { type: 'string', enum: ['replace', 'add'], description: '同一文件重复导入时替换既有资源还是新增副本，默认 replace' },
+      workspacePath: workspaceParameter,
+    }, output,
+    async execute(args: { projectId: string; files: unknown; mode?: string; workspacePath?: string }) {
+      const files = stringList(args.files, 'files', 500)
+      const result = await importRemote(storeFor(args.workspacePath), args.projectId, files, { replaceExisting: args.mode !== 'add' })
+      return projectResult(result.project, { imported: result.imported, replaced: result.replaced, errors: result.errors })
+    },
+  }))
+  ctx.tools.register(defineTool({
+    name: 'tavern_remote_export',
+    description: '把项目资源写入酒馆：角色卡导出为 PNG 到 characters/，世界书到 worlds/，预设按格式到 OpenAI Settings、TextGen Settings、context、instruct 或 sysprompt。导出后在酒馆界面刷新即可看到。',
+    parameters: {
+      projectId: { type: 'string', required: true },
+      assetIds: { type: 'json', required: true, description: '要导出的资源 ID 数组' },
+      conflict: { type: 'string', enum: ['overwrite', 'rename', 'skip'], description: '酒馆侧同名文件冲突策略，默认 overwrite' },
+      presetTarget: { type: 'string', enum: [...REMOTE_PRESET_CATEGORY_IDS], description: '预设目标目录；默认按格式自动判断，无法判断时写入 sysprompt' },
+      workspacePath: workspaceParameter,
+    }, output,
+    async execute(args: { projectId: string; assetIds: unknown; conflict?: string; presetTarget?: string; workspacePath?: string }) {
+      const assetIds = stringList(args.assetIds, 'assetIds', 500)
+      const conflict = (args.conflict ?? 'overwrite') as RemoteConflictPolicy
+      const presetTarget = args.presetTarget && (REMOTE_PRESET_CATEGORY_IDS as readonly string[]).includes(args.presetTarget) ? args.presetTarget as RemoteCategoryId : undefined
+      const results = await exportRemote(storeFor(args.workspacePath), args.projectId, assetIds, { conflict, presetTarget })
+      return toolResult({
+        results,
+        written: results.filter(value => value.status !== 'skipped').length,
+        skipped: results.filter(value => value.status === 'skipped').length,
       })
     },
   }))

@@ -1,9 +1,9 @@
-# dsh-stcardwriter managed preset v2
+# dsh-stcardwriter managed preset v3
 # DSH rc8 standard Agent-plane tools plus SillyTavern authoring tools.
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
-    complete: true
+    complete: false
     includeRuntimeContext: false
     text: |-
       你是“酒馆创作模式”Agent，负责 SillyTavern 角色卡、世界书和预设的创作与整理。

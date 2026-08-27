@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { unzipSync, zipSync } from 'fflate'
 import {
-  ProjectStore, assetSummaryForAgent, characterResourceSummary, copyWorldbookEntries, createAsset, createApiHandler, createWorkspaceStoreResolver,
-  deleteWorldbookEntry, detectKind, exportAsset, exportProject, importAsset, migrateCharacterResources, orderedPresetPrompts, patchCharacterFields,
-  projectForAgent, projectManifestForAgent, readCharacterFromPng, readCharacterTextResource, selectedAssetFieldsForAgent, toCharacterV2,
-  toCharacterV3, toLosslessJson, upsertWorldbookEntry, worldbookEntryRecords,
+  ProjectStore, assetSummaryForAgent, characterResourceSummary, clearConnectorConfig, copyWorldbookEntries, createAsset, createApiHandler,
+  createWorkspaceStoreResolver, deleteWorldbookEntry, describeConnection, detectKind, exportAsset, exportProject, exportRemote, importAsset,
+  importRemote, listRemote, migrateCharacterResources, orderedPresetPrompts, patchCharacterFields, probePath,
+  projectForAgent, projectManifestForAgent, readCharacterFromPng, readCharacterTextResource, readConnectorConfig,
+  saveConnector, selectedAssetFieldsForAgent, toCharacterV2, toCharacterV3, toLosslessJson,
+  upsertWorldbookEntry, worldbookEntryRecords,
 } from '../dist/index.js'
 
 function assertLosslessJson(value) {
@@ -305,4 +307,198 @@ test('blank asset factories create native structures', () => {
   assert.equal(createAsset('character').data.spec, 'chara_card_v3')
   assert.deepEqual(createAsset('worldbook').data.entries, {})
   assert.ok(Array.isArray(createAsset('preset').data.prompt_order))
+})
+
+async function buildFakeTavern(base) {
+  const install = join(base, 'SillyTavern')
+  const user = join(install, 'data', 'default-user')
+  const second = join(install, 'data', 'tester')
+  for (const dir of ['characters', 'worlds', 'OpenAI Settings', 'TextGen Settings', 'context', 'instruct', 'sysprompt']) {
+    await mkdir(join(user, dir), { recursive: true })
+  }
+  await mkdir(join(second, 'characters'), { recursive: true })
+  const cardA = importAsset('林霁.json', Buffer.from(JSON.stringify(sampleV2())))
+  const cardB = createAsset('character', '阿澈')
+  await writeFile(join(user, 'characters', '林霁.png'), exportAsset(cardA, 'png').bytes)
+  await writeFile(join(user, 'characters', '阿澈.png'), exportAsset(cardB, 'png').bytes)
+  await writeFile(join(user, 'characters', 'readme.txt'), '不是角色卡')
+  await writeFile(join(user, 'worlds', '城镇.json'), JSON.stringify({ entries: { 0: { key: ['城'], content: '城墙很高。' } } }))
+  await writeFile(join(user, 'OpenAI Settings', '写作预设.json'), JSON.stringify({ name: '写作预设', temperature: 1, prompts: [], prompt_order: [] }))
+  await writeFile(join(user, 'context', 'ChatML.json'), JSON.stringify({ name: 'ChatML', story_string: '{{char}}' }))
+  await writeFile(join(user, 'sysprompt', 'Actor.json'), JSON.stringify({ name: 'Actor', prompt: 'Be an actor.' }))
+  await writeFile(join(second, 'characters', '二号用户卡.png'), exportAsset(cardB, 'png').bytes)
+  return { install, user, second }
+}
+
+test('connector probe recognizes install roots, user data roots and rejects unknown paths', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'dsh-stcw-probe-'))
+  try {
+    const { install, user } = await buildFakeTavern(base)
+    const fromInstall = await probePath(install)
+    assert.equal(fromInstall.type, 'install-root')
+    assert.ok(fromInstall.userHandles.includes('default-user'))
+    assert.ok(fromInstall.userHandles.includes('tester'))
+    assert.equal(fromInstall.userHandle, 'default-user')
+    assert.equal(fromInstall.status.userDataRoot, user)
+    const counts = Object.fromEntries(fromInstall.status.categories.map(category => [category.id, category.count]))
+    assert.deepEqual(counts, { characters: 2, worlds: 1, 'chat-completion': 1, textgen: 0, context: 1, instruct: 0, sysprompt: 1 })
+    assert.equal((await probePath(user)).type, 'user-data-root')
+    const fromData = await probePath(join(install, 'data'))
+    assert.equal(fromData.type, 'install-root')
+    assert.deepEqual(fromData.userHandles.sort(), ['default-user', 'tester'])
+    assert.equal((await probePath(join(base, '不存在'))).type, 'unknown')
+    assert.equal((await probePath('')).type, 'unknown')
+  } finally { await rm(base, { recursive: true, force: true }) }
+})
+
+test('connector config persists beside projects and reconnects by saved path', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'dsh-stcw-config-'))
+  try {
+    const { install, user } = await buildFakeTavern(workspace)
+    const storeRoot = join(workspace, '.tavernres', 'projects')
+    const saved = await saveConnector(storeRoot, install)
+    assert.equal(saved.config.userDataRoot, user)
+    assert.equal(saved.config.userHandle, 'default-user')
+    const reloaded = await readConnectorConfig(storeRoot)
+    assert.equal(reloaded.userDataRoot, user)
+    const status = await describeConnection(reloaded.userDataRoot)
+    assert.equal(status.categories.find(category => category.id === 'characters').count, 2)
+    const handleSaved = await saveConnector(storeRoot, install, 'tester')
+    assert.equal(handleSaved.config.userDataRoot, join(install, 'data', 'tester'))
+    await clearConnectorConfig(storeRoot)
+    assert.equal(await readConnectorConfig(storeRoot), undefined)
+  } finally { await rm(workspace, { recursive: true, force: true }) }
+})
+
+test('connector imports from the fake tavern with replace and add modes and safe path checks', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'dsh-stcw-import-'))
+  try {
+    const { install } = await buildFakeTavern(workspace)
+    const store = new ProjectStore(join(workspace, '.tavernres', 'projects'))
+    await saveConnector(store.root, install)
+    const entries = await listRemote(store.root)
+    assert.equal(entries.length, 6)
+    assert.ok(entries.every(entry => entry.file.startsWith(entry.directory + '/')))
+    assert.deepEqual(entries.filter(entry => entry.kind === 'preset').map(entry => entry.file),
+      ['context/ChatML.json', 'OpenAI Settings/写作预设.json', 'sysprompt/Actor.json'])
+
+    const project = await store.create('连接项目')
+    const first = await importRemote(store, project.id, ['characters/林霁.png', 'worlds/城镇.json'])
+    assert.equal(first.imported, 2)
+    assert.equal(first.errors.length, 0)
+    assert.equal(first.project.assets[0].source.filename, 'characters/林霁.png')
+    assert.equal(first.project.assets[0].name, '林霁')
+    assert.equal(first.project.assets[1].kind, 'worldbook')
+    const charId = first.project.assets[0].id
+
+    const again = await importRemote(store, project.id, ['characters/林霁.png', 'worlds/城镇.json'])
+    assert.equal(again.imported, 0)
+    assert.equal(again.replaced, 2)
+    assert.equal(again.project.assets.length, 2)
+    assert.equal(again.project.assets[0].id, charId)
+
+    const added = await importRemote(store, project.id, ['characters/林霁.png'], { replaceExisting: false })
+    assert.equal(added.imported, 1)
+    assert.equal(added.project.assets.length, 3)
+
+    const rejected = await importRemote(store, project.id, ['../secrets.json', 'chats/xx.json', 'characters/林霁.webp'])
+    assert.equal(rejected.imported, 0)
+    assert.equal(rejected.errors.length, 3)
+    await assert.rejects(importRemote(store, project.id, []), /不能为空/)
+    await assert.rejects(importRemote(new ProjectStore(join(workspace, '其他')), project.id, ['characters/林霁.png']), /尚未配置/)
+  } finally { await rm(workspace, { recursive: true, force: true }) }
+})
+
+test('connector exports characters, worldbooks and presets with conflict policies', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'dsh-stcw-export-'))
+  try {
+    const { install, user } = await buildFakeTavern(workspace)
+    const store = new ProjectStore(join(workspace, '.tavernres', 'projects'))
+    await saveConnector(store.root, install)
+    let project = await store.create('导出项目')
+    await store.addBlankAsset(project.id, 'character', '新角色')
+    await store.addBlankAsset(project.id, 'worldbook', '新世界书')
+    await store.addBlankAsset(project.id, 'preset', '新预设')
+    project = await store.get(project.id)
+    const ids = project.assets.map(asset => asset.id)
+
+    const written = await exportRemote(store, project.id, ids)
+    assert.deepEqual(written.map(item => [item.file, item.status]), [
+      ['characters/新角色.png', 'written'],
+      ['worlds/新世界书.json', 'written'],
+      ['OpenAI Settings/新预设.json', 'written'],
+    ])
+    assert.equal(readCharacterFromPng(await readFile(join(user, 'characters', '新角色.png'))).data.name, '新角色')
+
+    const overwritten = await exportRemote(store, project.id, ids, { conflict: 'overwrite' })
+    assert.deepEqual(overwritten.map(item => item.status), ['overwritten', 'overwritten', 'overwritten'])
+    const skipped = await exportRemote(store, project.id, ids, { conflict: 'skip' })
+    assert.deepEqual(skipped.map(item => item.status), ['skipped', 'skipped', 'skipped'])
+    const renamed = await exportRemote(store, project.id, [ids[0]], { conflict: 'rename' })
+    assert.deepEqual(renamed.map(item => [item.file, item.status]), [['characters/新角色 (2).png', 'renamed']])
+
+    const unknownPreset = project.assets.find(asset => asset.id === ids[2])
+    unknownPreset.format = 'unknown-preset'
+    await store.putAsset(project.id, unknownPreset.id, unknownPreset)
+    const retargeted = await exportRemote(store, project.id, [ids[2]], { presetTarget: 'instruct' })
+    assert.equal(retargeted[0].file, 'instruct/新预设.json')
+    await assert.rejects(exportRemote(store, project.id, ['missing-id']), /找不到资源/)
+    await assert.rejects(exportRemote(store, project.id, []), /不能为空/)
+  } finally { await rm(workspace, { recursive: true, force: true }) }
+})
+
+test('HTTP API connector routes configure, list, import and export', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'dsh-stcw-api-connector-'))
+  const server = createServer(createApiHandler(createWorkspaceStoreResolver()))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  const base = `http://127.0.0.1:${address.port}/api/dsh-stcardwriter`
+  const jsonHeaders = { 'content-type': 'application/json', 'x-dsh-workspace': encodeURIComponent(workspace) }
+  try {
+    const { install, user } = await buildFakeTavern(workspace)
+    assert.equal((await (await fetch(`${base}/connector`, { headers: jsonHeaders })).json()).connected, false)
+    const unconfigured = await fetch(`${base}/connector/remote`, { headers: jsonHeaders })
+    assert.equal(unconfigured.status, 400)
+
+    const saved = await fetch(`${base}/connector`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ path: install }) })
+    assert.equal(saved.status, 200)
+    const savedBody = await saved.json()
+    assert.equal(savedBody.config.userDataRoot, user)
+    const persistedConfig = JSON.parse(await readFile(join(workspace, '.tavernres', 'connector.json'), 'utf8'))
+    assert.equal(persistedConfig.userDataRoot, user)
+
+    const badPath = await fetch(`${base}/connector`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ path: join(workspace, '不存在') }) })
+    assert.equal(badPath.status, 400)
+    const probed = await (await fetch(`${base}/connector/probe`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ path: install }) })).json()
+    assert.equal(probed.probe.type, 'install-root')
+
+    const remote = await (await fetch(`${base}/connector/remote`, { headers: jsonHeaders })).json()
+    assert.equal(remote.entries.length, 6)
+    const worldbooks = await (await fetch(`${base}/connector/remote?kind=worldbook`, { headers: jsonHeaders })).json()
+    assert.deepEqual(worldbooks.entries.map(entry => entry.file), ['worlds/城镇.json'])
+
+    const created = await (await fetch(`${base}/projects`, { method: 'POST', headers: jsonHeaders, body: '{}' })).json()
+    const projectId = created.project.id
+    const imported = await (await fetch(`${base}/connector/import`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ projectId, files: ['characters/林霁.png'] }),
+    })).json()
+    assert.equal(imported.imported, 1)
+    const assetId = imported.project.assets[0].id
+
+    const exported = await (await fetch(`${base}/connector/export`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ projectId, assetIds: [assetId] }),
+    })).json()
+    assert.deepEqual(exported.results.map(item => [item.file, item.status]), [['characters/林霁.png', 'overwritten']])
+    const roundTrip = await fetch(`${base}/connector/import`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ projectId, files: ['characters/林霁.png'] }),
+    }).then(value => value.json())
+    assert.equal(roundTrip.replaced, 1)
+
+    const disconnected = await fetch(`${base}/connector`, { method: 'DELETE', headers: jsonHeaders })
+    assert.equal(disconnected.status, 200)
+    assert.equal((await (await fetch(`${base}/connector`, { headers: jsonHeaders })).json()).connected, false)
+  } finally {
+    await new Promise(resolve => server.close(resolve))
+    await rm(workspace, { recursive: true, force: true })
+  }
 })

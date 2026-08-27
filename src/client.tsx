@@ -353,6 +353,117 @@ function HarnessPanel({ workspacePath, project, asset }: { workspacePath: string
     <p className="stcw-hint">{harnessBridge ? `已连接当前 Harness 会话 · 资源存储于 ${workspacePath}\\.tavernres` : '当前没有可连接的 Harness 会话；仍可手动编辑资源，或先在该工作区新建会话。'}</p></section>
 }
 
+interface ConnectorCategoryInfo { id: string; directory: string; kind: string; exists: boolean; count: number }
+interface ConnectorInfo {
+  connected: boolean
+  config?: { path: string; userHandle: string; userDataRoot: string }
+  status?: { userDataRoot: string; categories: ConnectorCategoryInfo[] }
+}
+interface RemoteEntryInfo { category: string; directory: string; kind: string; name: string; file: string; bytes: number }
+interface ProbeInfo { path: string; type: 'user-data-root' | 'install-root' | 'unknown'; message: string; userHandles: string[]; userHandle?: string; status?: { userDataRoot: string; categories: ConnectorCategoryInfo[] } }
+
+function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error) }
+
+function PresetPlusPanel() {
+  return <section className="stcw-connector stcw-presetplus">
+    <div className="stcw-panel-title">Preset Plus 预设注入</div>
+    <p className="stcw-hint">当前“酒馆创作模式”已加入 Preset Plus 作用域，会应用其当前激活预设。预设内容、启用状态与伪装消息统一在 DSH 设置里的“预设增强”管理。</p>
+  </section>
+}
+
+function ConnectorPanel({ project, accept, notice }: { project: TavernProject; accept: (project: TavernProject) => void; notice: (value: string) => void }) {
+  const [info, setInfo] = useState<ConnectorInfo | null>(null)
+  const [draft, setDraft] = useState('')
+  const [probe, setProbe] = useState<ProbeInfo | null>(null)
+  const [entries, setEntries] = useState<RemoteEntryInfo[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [busy, setBusy] = useState(false)
+  const [conflict, setConflict] = useState('overwrite')
+  const load = async () => {
+    const result = await api<ConnectorInfo>('/connector')
+    setInfo(result)
+    setProbe(null)
+    if (result.connected) setEntries((await api<{ entries: RemoteEntryInfo[] }>('/connector/remote')).entries)
+    else setEntries([])
+  }
+  useEffect(() => { setInfo(null); setSelected(new Set()); if (project?.id) void load().catch(error => notice(error.message)) }, [project?.id])
+  if (!info) return <section className="stcw-connector"><div className="stcw-panel-title">酒馆连接器</div><p className="stcw-hint">加载中…</p></section>
+  const toggle = (file: string, checked: boolean) => setSelected(current => {
+    const next = new Set(current)
+    if (checked) next.add(file); else next.delete(file)
+    return next
+  })
+  const doProbe = async () => {
+    try { setProbe(null); setProbe((await api<{ probe: ProbeInfo }>('/connector/probe', { method: 'POST', body: JSON.stringify({ path: draft }) })).probe) }
+    catch (error) { notice(errorText(error)) }
+  }
+  const doSave = async () => {
+    try { await api('/connector', { method: 'PUT', body: JSON.stringify({ path: draft, userHandle: probe?.userHandle }) }); setSelected(new Set()); await load() }
+    catch (error) { notice(errorText(error)) }
+  }
+  const disconnect = async () => {
+    if (!confirm('断开酒馆连接？项目数据不受影响。')) return
+    try { await api('/connector', { method: 'DELETE' }); await load(); notice('已断开酒馆连接') } catch (error) { notice(errorText(error)) }
+  }
+  const importFiles = async (files: string[]) => {
+    setBusy(true)
+    try {
+      const result = await api<{ project: TavernProject; imported: number; replaced: number; errors: { file: string; error: string }[] }>('/connector/import', { method: 'POST', body: JSON.stringify({ projectId: project.id, files }) })
+      accept(result.project)
+      setSelected(new Set())
+      notice(`从酒馆导入 ${result.imported} 项${result.replaced ? `，替换 ${result.replaced} 项` : ''}${result.errors.length ? `，${result.errors.length} 项失败` : ''}`)
+    } catch (error) { notice(errorText(error)) } finally { setBusy(false) }
+  }
+  const exportAll = async () => {
+    if (!project.assets.length) return
+    if (!confirm(`把项目“${project.name}”的全部 ${project.assets.length} 项资源导出到酒馆？冲突策略：${conflict === 'overwrite' ? '同名覆盖' : conflict === 'rename' ? '同名改名' : '同名跳过'}。`)) return
+    setBusy(true)
+    try {
+      const result = await api<{ results: { file: string; status: string }[] }>('/connector/export', { method: 'POST', body: JSON.stringify({ projectId: project.id, assetIds: project.assets.map(value => value.id), conflict }) })
+      const counts = result.results.reduce<Record<string, number>>((all, item) => ({ ...all, [item.status]: (all[item.status] ?? 0) + 1 }), {})
+      notice(`已导出到酒馆：${Object.entries(counts).map(([key, value]) => `${value} ${key}`).join('、')}。在酒馆中刷新即可看到`)
+    } catch (error) { notice(errorText(error)) } finally { setBusy(false) }
+  }
+  return <section className="stcw-connector">
+    <div className="stcw-panel-title">酒馆连接器</div>
+    {!info.connected ? <>
+      <p className="stcw-hint">填入本机酒馆安装根目录或用户数据目录，即可互导角色卡、世界书和预设。</p>
+      <div className="stcw-row"><input value={draft} placeholder="例如 F:\SillyTavern" onChange={event => setDraft(event.target.value)} /><button disabled={!draft.trim()} onClick={() => void doProbe()}>探测</button></div>
+      {probe && <div className="stcw-probe-result">
+        <p className={probe.type === 'unknown' ? 'stcw-probe-error' : 'stcw-safe-note'}>{probe.message}</p>
+        {probe.type === 'install-root' && probe.userHandles.length > 1 && <label className="stcw-field"><span>酒馆用户</span>
+          <select value={probe.userHandle} onChange={event => setProbe({ ...probe, userHandle: event.target.value })}>{probe.userHandles.map(handle => <option key={handle} value={handle}>{handle}</option>)}</select></label>}
+        {probe.type !== 'unknown' && <div className="stcw-cat-badges">{probe.status?.categories.map(category => <span key={category.id} className={category.exists ? 'ok' : ''} title={category.directory}>{category.directory} {category.count}</span>)}</div>}
+        {probe.type !== 'unknown' && <button className="primary" onClick={() => void doSave()}>保存连接</button>}
+      </div>}
+    </> : <>
+      <div className="stcw-cat-badges">{info.status?.categories.map(category => <span key={category.id} className={category.exists ? 'ok' : ''} title={category.directory}>{category.directory} {category.count}</span>)}</div>
+      <p className="stcw-hint" title={info.config!.userDataRoot}>已连接 {info.config!.userHandle || '用户数据目录'} · 导出后在酒馆中刷新即可看到</p>
+      <div className="stcw-row">
+        <button onClick={() => void load().catch(error => notice(error.message))}>刷新</button>
+        <select value={conflict} title="导出同名冲突策略" onChange={event => setConflict(event.target.value)}>
+          <option value="overwrite">同名覆盖</option><option value="rename">同名改名</option><option value="skip">同名跳过</option>
+        </select>
+        <button disabled={busy || !project.assets.length} onClick={() => void exportAll()}>全部导出到酒馆</button>
+      </div>
+      {info.status?.categories.filter(category => category.exists).map(category => {
+        const list = entries.filter(entry => entry.category === category.id)
+        const allSelected = list.length > 0 && list.every(entry => selected.has(entry.file))
+        return <details key={category.id} className="stcw-remote-group" open={category.id === 'characters'}>
+          <summary>{category.directory}（{list.length}）</summary>
+          <label className="stcw-remote-all"><input type="checkbox" checked={allSelected} onChange={event => { for (const entry of list) toggle(entry.file, event.target.checked) }} />全选</label>
+          <div className="stcw-remote-list">{list.map(entry => <label key={entry.file}>
+            <input type="checkbox" checked={selected.has(entry.file)} onChange={event => toggle(entry.file, event.target.checked)} />
+            <span><b>{entry.name}</b><small>{Math.max(1, Math.ceil(entry.bytes / 1024))} KiB</small></span>
+          </label>)}</div>
+          <button disabled={busy || !list.some(entry => selected.has(entry.file))} onClick={() => void importFiles(list.filter(entry => selected.has(entry.file)).map(entry => entry.file))}>导入所选到项目</button>
+        </details>
+      })}
+      <button className="danger" onClick={() => void disconnect()}>断开连接</button>
+    </>}
+  </section>
+}
+
 function Workbench(props: any) {
   const isOpen = useSyncExternalStore(subscribe, () => opened)
   const currentWorkspace = props.useSessions((state: any) => state.current ? state.byId[state.current]?.cwd : undefined)
@@ -408,6 +519,13 @@ function Workbench(props: any) {
     acceptProject(result.project); setSelectedId(result.project.assets.at(-1)?.id || ''); setNotice(`导入 ${result.imported} 项${embeddedBooks ? `，检测到 ${embeddedBooks} 本内嵌世界书` : ''}${embeddedFiles ? `，保留 ${embeddedFiles} 个附属文件` : ''}${result.errors.length ? `，${result.errors.length} 项失败` : ''}`)
   }
   const deleteAsset = async () => { if (!project || !asset || !confirm(`删除“${asset.name}”？`)) return; const result = await api<{ project: TavernProject }>(`/projects/${project.id}/assets/${asset.id}`, { method: 'DELETE' }); acceptProject(result.project); setSelectedId(result.project.assets[0]?.id || '') }
+  const exportToTavern = async () => {
+    if (!project || !asset) return
+    if (!confirm(`把“${asset.name}”导出到酒馆？同名文件将被覆盖。`)) return
+    const result = await api<{ results: { file: string; status: string }[] }>('/connector/export', { method: 'POST', body: JSON.stringify({ projectId: project.id, assetIds: [asset.id] }) })
+    const item = result.results[0]
+    setNotice(`已${item.status === 'overwritten' ? '覆盖' : '写入'}酒馆 ${item.file}；在酒馆中刷新即可看到`)
+  }
   const deleteProject = async () => {
     if (!project || !confirm(`删除项目“${project.name}”及其中全部资源？`)) return
     await api(`/projects/${project.id}`, { method: 'DELETE' })
@@ -420,9 +538,12 @@ function Workbench(props: any) {
         <label className="stcw-file" title="可一次选择多个 JSON、PNG、CHARX 或 ZIP">导入资源<input type="file" multiple accept=".json,.png,.charx,.zip,application/json,image/png,application/zip" onChange={e => { void importFiles(e.target.files); e.currentTarget.value = '' }} /></label>
         <button onClick={() => void add('character')}>＋角色卡</button><button onClick={() => void add('worldbook')}>＋世界书</button><button onClick={() => void add('preset')}>＋预设</button>
         {asset ? <a className="stcw-button" title={`导出“${asset.name}”`} href={downloadUrl(`/projects/${project.id}/assets/${asset.id}/export?format=${asset.kind === 'character' ? (asset.source?.container === 'charx' ? 'charx' : 'png') : 'json'}`)}>导出当前资源</a> : <span className="stcw-button disabled" title="请先选择资源">导出当前资源</span>}
+        {asset && <button title="通过酒馆连接器写入本机 SillyTavern" onClick={() => void exportToTavern().catch(error => setNotice(error.message))}>导出到酒馆</button>}
         <a className="stcw-button" href={downloadUrl(`/projects/${project.id}/export`)}>导出全部资源 ZIP</a><button className="danger" onClick={() => void deleteProject()}>删除项目</button><span className="stcw-notice">{notice}</span>
       </div>
       <main className="stcw-studio"><aside className="stcw-ai-pane"><HarnessPanel workspacePath={workspacePath} project={project} asset={asset} />
+        <PresetPlusPanel />
+        <ConnectorPanel project={project} accept={acceptProject} notice={setNotice} />
         <div className="stcw-panel-title">项目资源</div><div className="stcw-assets">{project.assets.length ? project.assets.map(item => <button key={item.id} className={item.id === asset?.id ? 'active' : ''} onClick={() => setSelectedId(item.id)}><span>{item.kind === 'character' ? '角色' : item.kind === 'worldbook' ? '世界' : '预设'}</span><b>{item.name}</b><small>{item.format}{item.kind === 'character' && innerCharacter(item).character_book ? ' · 内嵌世界书' : ''}{item.resources?.length ? ` · ${item.resources.length} 文件` : ''}</small></button>) : <div className="stcw-empty">这是一个空项目。用上方按钮新建或批量导入。</div>}</div>
         {asset?.kind === 'character' && <MigrationTool project={project} target={asset} accept={acceptProject} notice={setNotice} />}</aside>
         <section className="stcw-resource-pane"><div className="stcw-resource-grid"><section className="stcw-editor">{asset ? <><div className="stcw-editor-head"><div><input value={asset.name} onChange={e => changeAsset(next => { next.name = e.target.value })} /><small>{asset.format}</small></div><div><button onClick={() => void save()}>保存</button>{asset.kind === 'character' && <><a className="stcw-button" href={downloadUrl(`/projects/${project.id}/assets/${asset.id}/export?format=png`)}>PNG</a><a className="stcw-button" href={downloadUrl(`/projects/${project.id}/assets/${asset.id}/export?format=v3`)}>V3 JSON</a><a className="stcw-button" href={downloadUrl(`/projects/${project.id}/assets/${asset.id}/export?format=charx`)}>CHARX</a></>} {asset.kind !== 'character' && <a className="stcw-button" href={downloadUrl(`/projects/${project.id}/assets/${asset.id}/export?format=json`)}>导出 JSON</a>}<button className="danger" onClick={() => void deleteAsset()}>删除</button></div></div>
@@ -439,7 +560,7 @@ const CSS = `
 
 const EXTRA_CSS = `
 .stcw-composer-button{border:0;background:transparent;color:inherit;padding:4px 7px;border-radius:6px;cursor:pointer}.stcw-composer-button:hover{background:color-mix(in srgb,currentColor 10%,transparent)}
-.stcw-studio{display:grid;grid-template-columns:330px minmax(0,1fr);min-height:0;flex:1}.stcw-ai-pane{min-height:0;overflow:auto;padding:12px;border-right:1px solid #302a3a;background:#121019}.stcw-resource-pane{min-width:0;min-height:0}.stcw-resource-grid{height:100%;display:grid;grid-template-columns:minmax(480px,1fr) minmax(300px,36%);min-height:0}.stcw-panel-title{text-transform:uppercase;letter-spacing:.12em;font-size:11px;color:#aa95ba;margin:3px 0 9px}.stcw-harness{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-harness textarea{width:100%;resize:vertical}.stcw-harness-actions{display:flex;gap:7px;margin-top:8px}.stcw-harness-actions button{flex:1}.stcw-workbench button.primary{background:#694697;border-color:#9367c8}.stcw-workbench button:disabled{opacity:.45;cursor:not-allowed}.stcw-ai-pane>.stcw-assets{border:0;padding:0;max-height:35vh;overflow:auto}.stcw-migrate{margin-top:12px;border-top:1px solid #302a3a;padding-top:10px}.stcw-migrate summary,.stcw-resources summary{cursor:pointer;color:#ccb5e6;font-weight:700;margin-bottom:9px}.stcw-migrate-list{max-height:190px;overflow:auto;margin:8px 0}.stcw-migrate-list label{display:flex;gap:7px;padding:6px;border-radius:6px}.stcw-migrate-list label:hover{background:#211b29}.stcw-migrate-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-migrate-list small{color:#9e90aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-safe-note{color:#aee6c1;background:#153421;padding:7px;border-radius:6px;font-size:12px}.stcw-resources{border:1px solid #3d3548;border-radius:8px;padding:9px;margin-bottom:12px}.stcw-resource-badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px}.stcw-resource-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-resource-badges span.ok{background:#16422a;color:#aee6c1}.stcw-resource-row{display:grid;grid-template-columns:minmax(100px,1fr) auto;gap:2px 8px;padding:6px;border-top:1px solid #2e2736}.stcw-resource-row code{grid-column:1/3;color:#9f90ae;word-break:break-all}.stcw-resource-row em{grid-column:1/3;color:#ffafba}.stcw-workbench header small{color:#998ca5;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}@media(max-width:1150px){.stcw-studio{grid-template-columns:285px minmax(0,1fr)}.stcw-resource-grid{grid-template-columns:minmax(420px,1fr) 300px}}`
+.stcw-studio{display:grid;grid-template-columns:330px minmax(0,1fr);min-height:0;flex:1}.stcw-ai-pane{min-height:0;overflow:auto;padding:12px;border-right:1px solid #302a3a;background:#121019}.stcw-resource-pane{min-width:0;min-height:0}.stcw-resource-grid{height:100%;display:grid;grid-template-columns:minmax(480px,1fr) minmax(300px,36%);min-height:0}.stcw-panel-title{text-transform:uppercase;letter-spacing:.12em;font-size:11px;color:#aa95ba;margin:3px 0 9px}.stcw-harness{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-harness textarea{width:100%;resize:vertical}.stcw-harness-actions{display:flex;gap:7px;margin-top:8px}.stcw-harness-actions button{flex:1}.stcw-workbench button.primary{background:#694697;border-color:#9367c8}.stcw-workbench button:disabled{opacity:.45;cursor:not-allowed}.stcw-ai-pane>.stcw-assets{border:0;padding:0;max-height:35vh;overflow:auto}.stcw-migrate{margin-top:12px;border-top:1px solid #302a3a;padding-top:10px}.stcw-migrate summary,.stcw-resources summary{cursor:pointer;color:#ccb5e6;font-weight:700;margin-bottom:9px}.stcw-migrate-list{max-height:190px;overflow:auto;margin:8px 0}.stcw-migrate-list label{display:flex;gap:7px;padding:6px;border-radius:6px}.stcw-migrate-list label:hover{background:#211b29}.stcw-migrate-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-migrate-list small{color:#9e90aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-safe-note{color:#aee6c1;background:#153421;padding:7px;border-radius:6px;font-size:12px}.stcw-resources{border:1px solid #3d3548;border-radius:8px;padding:9px;margin-bottom:12px}.stcw-resource-badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px}.stcw-resource-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-resource-badges span.ok{background:#16422a;color:#aee6c1}.stcw-resource-row{display:grid;grid-template-columns:minmax(100px,1fr) auto;gap:2px 8px;padding:6px;border-top:1px solid #2e2736}.stcw-resource-row code{grid-column:1/3;color:#9f90ae;word-break:break-all}.stcw-resource-row em{grid-column:1/3;color:#ffafba}.stcw-workbench header small{color:#998ca5;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-connector{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-connector summary{cursor:pointer;color:#ccb5e6;font-weight:700}.stcw-connector input:not([type=checkbox]){width:100%}.stcw-connector .stcw-row{margin:8px 0;gap:6px}.stcw-connector .stcw-row input{flex:1}.stcw-connector .stcw-row select{flex:0 0 auto}.stcw-connector button{margin-top:4px}.stcw-connector button.danger{margin-top:10px}.stcw-probe-result{margin-top:9px;display:flex;flex-direction:column;gap:7px}.stcw-probe-error{color:#ffafba;background:#3a1b22;padding:7px;border-radius:6px;font-size:12px}.stcw-cat-badges{display:flex;gap:5px;flex-wrap:wrap;margin:4px 0}.stcw-cat-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-cat-badges span.ok{background:#16422a;color:#aee6c1}.stcw-remote-group{margin-top:8px;border-top:1px solid #302a3a;padding-top:7px}.stcw-remote-group summary{font-weight:600;color:#c9b6de;cursor:pointer}.stcw-remote-all{display:flex;gap:7px;align-items:center;margin:5px 0}.stcw-remote-list{max-height:190px;overflow:auto;margin:4px 0}.stcw-remote-list label{display:flex;gap:7px;align-items:center;padding:4px 5px;border-radius:6px}.stcw-remote-list label:hover{background:#211b29}.stcw-remote-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-remote-list label b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-remote-list small{color:#9e90aa}.stcw-dshprompt{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-dshprompt .stcw-field{margin:9px 0}.stcw-dshprompt textarea{width:100%;resize:vertical}.stcw-dshprompt .stcw-row{margin-top:9px}.stcw-dshprompt .stcw-row .stcw-hint{flex:1}@media(max-width:1150px){.stcw-studio{grid-template-columns:285px minmax(0,1fr)}.stcw-resource-grid{grid-template-columns:minmax(420px,1fr) 300px}}`
 
 const EMBEDDED_CSS = `.stcw-embedded-book{margin-top:18px;border:1px solid #493b57;border-radius:9px;padding:10px}.stcw-embedded-book>summary{cursor:pointer;color:#d1b6ea;font-weight:700}.stcw-embedded-book>.stcw-world-editor{margin-top:12px}.stcw-embedded-preview{margin-top:14px;border-top:1px solid #342d3e;padding-top:10px}`
 
