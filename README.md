@@ -1,8 +1,7 @@
 # DSH SillyTavern Card Writer
 
 [![MIT License](https://img.shields.io/badge/license-MIT-4b8f77.svg)](LICENSE)
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-rc.8-4f46e5.svg)](https://github.com/deepseek-ai/deepseek-harness)
-[![SillyTavern](https://img.shields.io/badge/SillyTavern-character%20authoring-bb6bd9.svg)](https://github.com/SillyTavern/SillyTavern)
+[![Node.js](https://img.shields.io/badge/Node.js-runtime-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 
 在 DeepSeek Harness 中创作、整理、预览和迁移 SillyTavern 角色卡、世界书与预设。npm 包名：`dsh-stcardwriter`。
 
