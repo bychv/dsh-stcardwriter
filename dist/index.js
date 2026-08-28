@@ -1098,9 +1098,9 @@ function writeCharacterToPng(input, v2, v3, extendedAssets) {
   ))) ?? [];
   const output = [SIGNATURE];
   for (const chunk of chunks) {
-    const text = decodeText(chunk);
-    if (text && meta.has(text.keyword)) continue;
-    if (extendedAssets && text?.keyword.startsWith("chara-ext-asset_:")) continue;
+    const text2 = decodeText(chunk);
+    if (text2 && meta.has(text2.keyword)) continue;
+    if (extendedAssets && text2?.keyword.startsWith("chara-ext-asset_:")) continue;
     if (chunk.type === "IEND") output.push(...encodedMeta, ...encodedAssets);
     output.push(encodeChunk(chunk.type, chunk.data));
   }
@@ -1246,6 +1246,7 @@ function createBlankData(kind) {
   };
 }
 function detectPresetFormat(data) {
+  if (typeof data.id === "string" && typeof data.name === "string" && Array.isArray(data.entries) && data.entries.every((entry) => isObject(entry) && ["system", "user", "assistant"].includes(String(entry.role ?? "")) && typeof entry.text === "string")) return "preset-plus-preset";
   if (Array.isArray(data.prompts) || Array.isArray(data.prompt_order)) return "chat-completion-preset";
   if (typeof data.story_string === "string") return "context-preset";
   if (typeof data.input_sequence === "string" || typeof data.output_sequence === "string") return "instruct-preset";
@@ -1258,8 +1259,10 @@ function detectKind(data) {
   if (data.spec === "chara_card_v2" || data.spec === "chara_card_v3" || hasCharacterFields) {
     return { kind: "character", format: characterVersion(data) };
   }
+  const presetFormat = detectPresetFormat(data);
+  if (presetFormat === "preset-plus-preset") return { kind: "preset", format: presetFormat };
   if (isObject(data.entries) || Array.isArray(data.entries)) return { kind: "worldbook", format: "worldbook" };
-  return { kind: "preset", format: detectPresetFormat(data) };
+  return { kind: "preset", format: presetFormat };
 }
 function assetName(data, fallback, kind) {
   if (kind === "character") return stringValue(characterData(data).name, fallback);
@@ -1486,27 +1489,27 @@ function declaredText(path, mimeType) {
 }
 function decodeTextBytes(bytes, path, mimeType) {
   const input = Buffer.from(bytes);
-  let text;
+  let text2;
   let encoding;
   if (input[0] === 255 && input[1] === 254) {
-    text = new TextDecoder("utf-16le", { fatal: true }).decode(input.subarray(2));
+    text2 = new TextDecoder("utf-16le", { fatal: true }).decode(input.subarray(2));
     encoding = "utf-16le";
   } else if (input[0] === 254 && input[1] === 255) {
-    text = new TextDecoder("utf-16be", { fatal: true }).decode(input.subarray(2));
+    text2 = new TextDecoder("utf-16be", { fatal: true }).decode(input.subarray(2));
     encoding = "utf-16be";
   } else {
     const start = input[0] === 239 && input[1] === 187 && input[2] === 191 ? 3 : 0;
-    text = new TextDecoder("utf-8", { fatal: true }).decode(input.subarray(start));
+    text2 = new TextDecoder("utf-8", { fatal: true }).decode(input.subarray(start));
     encoding = "utf-8";
   }
   if (!declaredText(path, mimeType)) {
-    const controls = [...text].filter((value) => {
+    const controls = [...text2].filter((value) => {
       const code = value.charCodeAt(0);
       return code < 32 && code !== 9 && code !== 10 && code !== 13;
     }).length;
-    if (text.includes("\0") || controls > Math.max(2, text.length * 0.01)) throw new Error("\u6240\u9009\u9644\u4EF6\u4E0D\u662F\u53EF\u5B89\u5168\u8BFB\u53D6\u7684\u6587\u672C\u683C\u5F0F");
+    if (text2.includes("\0") || controls > Math.max(2, text2.length * 0.01)) throw new Error("\u6240\u9009\u9644\u4EF6\u4E0D\u662F\u53EF\u5B89\u5168\u8BFB\u53D6\u7684\u6587\u672C\u683C\u5F0F");
   }
-  return { text, encoding };
+  return { text: text2, encoding };
 }
 function parseDataUri(uri) {
   if (!uri.startsWith("data:")) return void 0;
@@ -2656,6 +2659,163 @@ async function ensureAgentPreset() {
   return { installed: true, updated: false, path: destination };
 }
 
+// src/preset-plus.ts
+import { randomUUID as randomUUID4 } from "node:crypto";
+import { mkdir as mkdir4, readFile as readFile4, rename as rename3, writeFile as writeFile4 } from "node:fs/promises";
+import { homedir as homedir2 } from "node:os";
+import { dirname as dirname4, join as join4 } from "node:path";
+function text(value) {
+  return typeof value === "string" ? value : "";
+}
+function role(value, systemPrompt) {
+  if (value === "system" || value === "user" || value === "assistant") return value;
+  return systemPrompt === false ? "user" : "system";
+}
+function presetPlusId(value) {
+  const normalized = value.normalize("NFKC").trim().toLowerCase().replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+  return normalized || "tavern-preset";
+}
+function staticChatCompletionEntries(data, skipped) {
+  const prompts = Array.isArray(data.prompts) ? data.prompts.filter(isObject) : [];
+  const byId = new Map(prompts.map((prompt, index) => [String(prompt.identifier ?? index), { prompt, index }]));
+  const groups = Array.isArray(data.prompt_order) ? data.prompt_order.filter(isObject) : [];
+  const preferred = groups.find((group) => group.character_id === 100001) ?? groups[0];
+  const ordered = [];
+  const seen = /* @__PURE__ */ new Set();
+  if (preferred && Array.isArray(preferred.order)) {
+    for (const item of preferred.order.filter(isObject)) {
+      const identifier = String(item.identifier ?? "");
+      const match = byId.get(identifier);
+      if (!match) {
+        skipped.push({ identifier, reason: "prompt_order \u5F15\u7528\u4E86\u4E0D\u5B58\u5728\u7684 prompt" });
+        continue;
+      }
+      seen.add(match.index);
+      ordered.push({ prompt: match.prompt, identifier, enabled: item.enabled !== false });
+    }
+  }
+  for (const [index, prompt] of prompts.entries()) {
+    if (seen.has(index)) continue;
+    const identifier = String(prompt.identifier ?? index);
+    ordered.push({ prompt, identifier, enabled: preferred ? false : prompt.enabled !== false });
+  }
+  const entries = [];
+  for (const item of ordered) {
+    if (item.prompt.marker === true) {
+      skipped.push({ identifier: item.identifier, reason: "SillyTavern \u52A8\u6001 marker \u65E0\u6CD5\u8F6C\u6362\u4E3A\u9759\u6001 Preset Plus \u6761\u76EE" });
+      continue;
+    }
+    const content = text(item.prompt.content);
+    if (!content.trim()) {
+      skipped.push({ identifier: item.identifier, reason: "\u63D0\u793A\u8BCD\u6B63\u6587\u4E3A\u7A7A" });
+      continue;
+    }
+    entries.push({ role: role(item.prompt.role, item.prompt.system_prompt), text: content, enabled: item.enabled });
+  }
+  const prefill = text(data.assistant_prefill);
+  if (prefill.trim()) entries.push({ role: "assistant", text: prefill, enabled: true });
+  return entries;
+}
+function convertTavernPresetToPresetPlus(asset, options = {}) {
+  if (asset.kind !== "preset") throw new Error("\u53EA\u80FD\u8F6C\u6362\u9152\u9986\u9884\u8BBE\u8D44\u6E90");
+  const skipped = [];
+  const warnings = [];
+  const data = asset.data;
+  let entries = [];
+  if (asset.format === "chat-completion-preset" || Array.isArray(data.prompts)) {
+    entries = staticChatCompletionEntries(data, skipped);
+  } else if (typeof data.content === "string" || typeof data.system_prompt === "string") {
+    const main = text(data.content) || text(data.system_prompt);
+    if (main.trim()) entries.push({ role: "system", text: main, enabled: true });
+    const postHistory = text(data.post_history);
+    if (postHistory.trim()) entries.push({ role: "system", text: postHistory, enabled: true });
+  } else if (asset.format === "context-preset" && typeof data.story_string === "string") {
+    entries.push({ role: "system", text: data.story_string, enabled: true });
+    warnings.push("Context \u6A21\u677F\u4E2D\u7684 SillyTavern/Handlebars \u5B8F\u4F1A\u6309\u539F\u6587\u4FDD\u7559\uFF0CPreset Plus \u4E0D\u8D1F\u8D23\u5C55\u5F00\u8FD9\u4E9B\u5B8F");
+  }
+  if (entries.length === 0) {
+    throw new Error(`\u9884\u8BBE ${asset.name} \u6CA1\u6709\u53EF\u8F6C\u6362\u7684\u9759\u6001\u63D0\u793A\u8BCD\uFF1BInstruct/TextGen \u53C2\u6570\u9884\u8BBE\u4E0D\u80FD\u76F4\u63A5\u8F6C\u6362\u4E3A Preset Plus`);
+  }
+  if (entries[0]?.role !== "system") {
+    entries.unshift({ role: "system", text: "", enabled: true });
+    warnings.push("\u6E90\u9884\u8BBE\u6CA1\u6709\u9996\u6761 system \u63D0\u793A\u8BCD\uFF0C\u5DF2\u6DFB\u52A0 Preset Plus \u6240\u9700\u7684\u7A7A system \u6761\u76EE");
+  }
+  const name = options.name?.trim() || asset.name || text(data.name) || "\u9152\u9986\u9884\u8BBE";
+  const preset = {
+    id: presetPlusId(options.id?.trim() || name),
+    name,
+    autoMode: options.autoMode !== false,
+    entries
+  };
+  return { preset, sourceFormat: asset.format, converted: entries.length, skipped, warnings };
+}
+function presetPlusPresetFromAsset(asset) {
+  if (asset.kind !== "preset" || asset.format !== "preset-plus-preset") throw new Error("\u53EA\u80FD\u5199\u5165\u5DF2\u8F6C\u6362\u7684 preset-plus-preset \u8D44\u6E90");
+  const data = asset.data;
+  const id = typeof data.id === "string" && data.id.trim() ? presetPlusId(data.id) : presetPlusId(asset.name);
+  const name = typeof data.name === "string" && data.name.trim() ? data.name.trim() : asset.name.trim();
+  if (!name) throw new Error("Preset Plus \u9884\u8BBE\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A");
+  if (!Array.isArray(data.entries) || data.entries.length === 0) throw new Error("Preset Plus \u9884\u8BBE\u81F3\u5C11\u9700\u8981\u4E00\u4E2A\u6761\u76EE");
+  const entries = data.entries.map((value, index) => {
+    if (!isObject(value)) throw new Error(`Preset Plus \u6761\u76EE #${index + 1} \u5FC5\u987B\u662F\u5BF9\u8C61`);
+    if (value.role !== "system" && value.role !== "user" && value.role !== "assistant") throw new Error(`Preset Plus \u6761\u76EE #${index + 1} \u7684 role \u5FC5\u987B\u662F system\u3001user \u6216 assistant`);
+    if (typeof value.text !== "string") throw new Error(`Preset Plus \u6761\u76EE #${index + 1} \u7684 text \u5FC5\u987B\u662F\u5B57\u7B26\u4E32`);
+    return { role: value.role, text: value.text, enabled: value.enabled !== false };
+  });
+  if (entries[0]?.role !== "system") throw new Error("Preset Plus \u7B2C\u4E00\u6761\u5FC5\u987B\u662F system \u6761\u76EE\uFF1B\u8BF7\u5728\u9884\u89C8\u7F16\u8F91\u5668\u4E2D\u8C03\u6574\u540E\u518D\u5199\u5165");
+  if (entries[0].enabled === false) throw new Error("Preset Plus \u7B2C\u4E00\u6761 system \u6761\u76EE\u5FC5\u987B\u542F\u7528");
+  return { id, name, autoMode: data.autoMode !== false, entries };
+}
+function dshHome(explicit) {
+  return explicit?.trim() || process.env.DSH_HOME?.trim() || join4(homedir2(), ".dsh");
+}
+function multiPresetDocument(value) {
+  if (!isObject(value)) throw new Error("Preset Plus \u5B58\u50A8\u4E0D\u662F JSON \u5BF9\u8C61");
+  if (!isObject(value.presets)) throw new Error("Preset Plus \u5B58\u50A8\u7F3A\u5C11 presets \u5BF9\u8C61");
+  return value;
+}
+async function readPresetPlusDocument(path) {
+  try {
+    return multiPresetDocument(JSON.parse(await readFile4(path, "utf8")));
+  } catch (error) {
+    if (error.code === "ENOENT") return { version: 1, activePresetId: "", presets: {} };
+    throw new Error(`\u65E0\u6CD5\u8BFB\u53D6 Preset Plus \u5B58\u50A8\uFF1A${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+async function installPresetPlusPreset(preset, options = {}) {
+  const path = join4(dshHome(options.dshHome), "preset-plus.json");
+  const doc = await readPresetPlusDocument(path);
+  const presets = { ...doc.presets };
+  const requestedId = presetPlusId(preset.id);
+  let id = requestedId;
+  const conflict = options.conflict ?? "error";
+  if (conflict !== "error" && conflict !== "overwrite" && conflict !== "rename") throw new Error(`\u672A\u77E5 Preset Plus \u51B2\u7A81\u7B56\u7565\uFF1A${conflict}`);
+  const exists2 = Object.hasOwn(presets, id);
+  if (exists2 && conflict === "error") throw new Error(`Preset Plus \u9884\u8BBE ID \u5DF2\u5B58\u5728\uFF1A${id}`);
+  if (exists2 && conflict === "rename") {
+    let suffix = 2;
+    while (Object.hasOwn(presets, `${requestedId}-${suffix}`)) suffix += 1;
+    id = `${requestedId}-${suffix}`;
+  }
+  const savedPreset = { ...preset, id };
+  presets[id] = savedPreset;
+  const activePresetId = options.activate === true || typeof doc.activePresetId !== "string" || !doc.activePresetId ? id : doc.activePresetId;
+  const saved = { ...doc, version: 1, activePresetId, presets };
+  await mkdir4(dirname4(path), { recursive: true });
+  const temporary = `${path}.${process.pid}.${randomUUID4()}.tmp`;
+  await writeFile4(temporary, JSON.stringify(saved, null, 2), "utf8");
+  await rename3(temporary, path);
+  return {
+    id,
+    name: preset.name,
+    path,
+    replaced: exists2 && conflict === "overwrite",
+    renamed: id !== requestedId,
+    activated: activePresetId === id,
+    presetCount: Object.keys(presets).length
+  };
+}
+
 // src/index.ts
 var inject = ["webServer"];
 var PRESET_PLUS_SCOPES = ["preset-plus", "tavern-authoring"];
@@ -2693,6 +2853,7 @@ export {
   characterVersion,
   clearConnectorConfig,
   connectorConfigPath,
+  convertTavernPresetToPresetPlus,
   copyWorldbookEntries,
   createApiHandler,
   createAsset,
@@ -2713,6 +2874,7 @@ export {
   importAsset,
   importRemote,
   inject,
+  installPresetPlusPreset,
   isObject,
   listRemote,
   makePlaceholderPng,
@@ -2721,6 +2883,8 @@ export {
   orderedPresetPrompts,
   parsePngChunks,
   patchCharacterFields,
+  presetPlusId,
+  presetPlusPresetFromAsset,
   probePath,
   projectForAgent,
   projectManifestForAgent,

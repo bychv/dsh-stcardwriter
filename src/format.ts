@@ -144,6 +144,7 @@ export function createBlankData(kind: AssetKind): { format: AssetFormat; data: J
 }
 
 function detectPresetFormat(data: JsonObject): AssetFormat {
+  if (typeof data.id === 'string' && typeof data.name === 'string' && Array.isArray(data.entries) && data.entries.every(entry => isObject(entry) && ['system', 'user', 'assistant'].includes(String(entry.role ?? '')) && typeof entry.text === 'string')) return 'preset-plus-preset'
   if (Array.isArray(data.prompts) || Array.isArray(data.prompt_order)) return 'chat-completion-preset'
   if (typeof data.story_string === 'string') return 'context-preset'
   if (typeof data.input_sequence === 'string' || typeof data.output_sequence === 'string') return 'instruct-preset'
@@ -157,8 +158,10 @@ export function detectKind(data: JsonObject): { kind: AssetKind; format: AssetFo
   if (data.spec === 'chara_card_v2' || data.spec === 'chara_card_v3' || hasCharacterFields) {
     return { kind: 'character', format: characterVersion(data) }
   }
+  const presetFormat = detectPresetFormat(data)
+  if (presetFormat === 'preset-plus-preset') return { kind: 'preset', format: presetFormat }
   if (isObject(data.entries) || Array.isArray(data.entries)) return { kind: 'worldbook', format: 'worldbook' }
-  return { kind: 'preset', format: detectPresetFormat(data) }
+  return { kind: 'preset', format: presetFormat }
 }
 
 function assetName(data: JsonObject, fallback: string, kind: AssetKind): string {

@@ -168,7 +168,58 @@ function EmbeddedWorldbookEditor({ asset, change }: { asset: TavernAsset; change
   return <details className="stcw-embedded-book"><summary>内嵌世界书 · 可写作与触发预览</summary><div className="stcw-row"><span className="stcw-safe-note">保存在角色卡 character_book 中，导出与原卡同行。</span><button className="danger" onClick={remove}>移除内嵌世界书</button></div><WorldbookEditor asset={bookAsset} change={changeBook} /><div className="stcw-embedded-preview"><Preview asset={bookAsset} /></div></details>
 }
 
-function PresetEditor({ asset, change }: { asset: TavernAsset; change: (mutate: (asset: TavernAsset) => void) => void }) {
+function PresetPlusEditor({ asset, change }: { asset: TavernAsset; change: (mutate: (asset: TavernAsset) => void) => void }) {
+  const entries: any[] = Array.isArray(asset.data.entries) ? asset.data.entries as any[] : []
+  const [selected, setSelected] = useState(0)
+  useEffect(() => { setSelected(0) }, [asset.id])
+  const entry = entries[selected]
+  const alterRoot = (key: string, value: unknown) => change(next => {
+    ;(next.data as any)[key] = value
+    if (key === 'name' && typeof value === 'string') next.name = value
+  })
+  const alterEntry = (key: string, value: unknown) => change(next => {
+    const list: any[] = Array.isArray(next.data.entries) ? next.data.entries as any[] : []
+    if (list[selected]) list[selected][key] = value
+  })
+  const add = () => change(next => {
+    if (!Array.isArray(next.data.entries)) next.data.entries = []
+    const list = next.data.entries as any[]
+    list.push({ role: list.length === 0 ? 'system' : 'user', text: '', enabled: true })
+    setSelected(list.length - 1)
+  })
+  const remove = () => change(next => {
+    const list: any[] = Array.isArray(next.data.entries) ? next.data.entries as any[] : []
+    list.splice(selected, 1)
+    setSelected(Math.max(0, selected - 1))
+  })
+  const move = (offset: number) => change(next => {
+    const list: any[] = Array.isArray(next.data.entries) ? next.data.entries as any[] : []
+    const target = selected + offset
+    if (!list[selected] || target < 0 || target >= list.length) return
+    ;[list[selected], list[target]] = [list[target], list[selected]]
+    setSelected(target)
+  })
+  return <div className="stcw-world-editor">
+    <div className="stcw-entry-list"><button onClick={add}>＋ 新条目</button>{entries.map((item, index) =>
+      <button key={index} className={selected === index ? 'active' : ''} onClick={() => setSelected(index)}>
+        <b>{index + 1}. {item.role || '无角色'}</b><small>{item.enabled === false ? '已禁用' : String(item.text || '').slice(0, 28) || '（空）'}</small>
+      </button>)}</div>
+    <div className="stcw-entry-form">
+      <TextField label="Preset Plus 名称" value={field(asset.data, 'name')} onChange={value => alterRoot('name', value)} />
+      <TextField label="Preset Plus ID" value={field(asset.data, 'id')} onChange={value => alterRoot('id', value)} />
+      <div className="stcw-checks"><label><input type="checkbox" checked={asset.data.autoMode !== false} onChange={event => alterRoot('autoMode', event.target.checked)} />自动注入</label></div>
+      {entry ? <>
+        <div className="stcw-row"><strong>条目 {selected + 1}</strong><div><button disabled={selected === 0} onClick={() => move(-1)}>上移</button><button disabled={selected === entries.length - 1} onClick={() => move(1)}>下移</button><button className="danger" onClick={remove}>删除</button></div></div>
+        <label className="stcw-field"><span>Role</span><select value={String(entry.role || '')} onChange={event => alterEntry('role', event.target.value)}><option value="system">system</option><option value="user">user</option><option value="assistant">assistant</option></select></label>
+        <div className="stcw-checks"><label><input type="checkbox" checked={entry.enabled !== false} onChange={event => alterEntry('enabled', event.target.checked)} />启用</label></div>
+        <TextField label="提示词正文" multiline value={field(entry, 'text')} onChange={value => alterEntry('text', value)} />
+        {selected === 0 && (entry.role !== 'system' || entry.enabled === false) && <p className="stcw-probe-error">Preset Plus 要求第一条是已启用的 system 条目，写入前请修正。</p>}
+      </> : <p className="stcw-hint">至少添加一个已启用的 system 条目后才能写入 Preset Plus。</p>}
+    </div>
+  </div>
+}
+
+function SillyTavernPresetEditor({ asset, change }: { asset: TavernAsset; change: (mutate: (asset: TavernAsset) => void) => void }) {
   const prompts: any[] = Array.isArray(asset.data.prompts) ? asset.data.prompts as any[] : []
   const [selected, setSelected] = useState(0)
   const alterRoot = (key: string, value: unknown) => change(next => { (next.data as any)[key] = value; if (key === 'name' && typeof value === 'string') next.name = value })
@@ -209,6 +260,10 @@ function PresetEditor({ asset, change }: { asset: TavernAsset; change: (mutate: 
       </>}
     </div>
   </div>
+}
+
+function PresetEditor(props: { asset: TavernAsset; change: (mutate: (asset: TavernAsset) => void) => void }) {
+  return props.asset.format === 'preset-plus-preset' ? <PresetPlusEditor {...props} /> : <SillyTavernPresetEditor {...props} />
 }
 
 function RawEditor({ asset, apply }: { asset: TavernAsset; apply: (data: any) => void }) {
@@ -262,6 +317,11 @@ function Preview({ asset }: { asset: TavernAsset }) {
     const active = activeLoreEntries(asset, scan)
     return <div><h3>世界书激活预览</h3><TextField label="模拟聊天文本" multiline value={scan} onChange={setScan} /><div className="stcw-preview-note">命中 {active.length} 个条目（预览关键词与逻辑；概率/递归由 SillyTavern 最终执行）</div>
       {active.map((entry, index) => <article className="stcw-lore-hit" key={index}><b>{entry.comment || `条目 ${index + 1}`}</b><small>{Array.isArray(entry.key) ? entry.key.join(', ') : ''}</small><pre>{entry.content}</pre></article>)}</div>
+  }
+  if (asset.format === 'preset-plus-preset') {
+    const entries: any[] = Array.isArray(asset.data.entries) ? asset.data.entries as any[] : []
+    return <div><h3>Preset Plus 注入预览</h3><div className="stcw-preview-note">ID: {field(asset.data, 'id') || '未设置'} · 自动注入：{asset.data.autoMode === false ? '关' : '开'} · {entries.filter(entry => entry?.enabled !== false).length}/{entries.length} 条启用</div>
+      {entries.length ? entries.map((entry, index) => <article className="stcw-prompt" key={index} style={entry?.enabled === false ? { opacity: .48 } : undefined}><div><b>{index + 1}. {entry?.role || '无角色'}</b><span>{entry?.enabled === false ? 'disabled' : 'enabled'}</span></div><pre>{typeof entry?.text === 'string' && entry.text ? entry.text : '（空）'}</pre></article>) : <pre>尚无条目</pre>}</div>
   }
   const prompts: any[] = Array.isArray(asset.data.prompts) ? asset.data.prompts as any[] : []
   const byId = new Map(prompts.map(prompt => [String(prompt.identifier ?? ''), prompt]))
@@ -367,7 +427,7 @@ function errorText(error: unknown): string { return error instanceof Error ? err
 function PresetPlusPanel() {
   return <section className="stcw-connector stcw-presetplus">
     <div className="stcw-panel-title">Preset Plus 预设注入</div>
-    <p className="stcw-hint">当前“酒馆创作模式”已加入 Preset Plus 作用域，会应用其当前激活预设。预设内容、启用状态与伪装消息统一在 DSH 设置里的“预设增强”管理。</p>
+    <p className="stcw-hint">当前“酒馆创作模式”已加入 Preset Plus 作用域，会应用其当前激活预设。酒馆预设可由 Agent 转换成项目草稿，在中栏编辑、右栏预览，确认后再写入；已写入预设仍可在 DSH 设置里的“预设增强”管理。</p>
   </section>
 }
 

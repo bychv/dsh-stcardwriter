@@ -2,7 +2,7 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
 export type JsonObject = { [key: string]: JsonValue }
 
 export type AssetKind = 'character' | 'worldbook' | 'preset'
-export type AssetFormat = 'character-v1' | 'character-v2' | 'character-v3' | 'worldbook' | 'chat-completion-preset' | 'context-preset' | 'instruct-preset' | 'textgen-preset' | 'unknown-preset'
+export type AssetFormat = 'character-v1' | 'character-v2' | 'character-v3' | 'worldbook' | 'chat-completion-preset' | 'context-preset' | 'instruct-preset' | 'textgen-preset' | 'preset-plus-preset' | 'unknown-preset'
 
 export interface BinaryFileReference {
   /** Slash-normalized path relative to the ProjectStore root. */

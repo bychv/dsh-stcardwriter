@@ -10,6 +10,7 @@ import {
   toLosslessJson, upsertWorldbookEntry, worldbookEntryRecords,
 } from './format.js'
 import { ProjectStore, resolveWorkspaceDataRoot } from './store.js'
+import { convertTavernPresetToPresetPlus, installPresetPlusPreset, presetPlusPresetFromAsset } from './preset-plus.js'
 import type { AssetKind, JsonObject, TavernAsset, TavernProject } from './types.js'
 import type { EntryConflictPolicy } from './format.js'
 
@@ -301,6 +302,55 @@ export function apply(ctx: ToolContext): void {
       const data = Buffer.from(args.json, 'utf8').toString('base64')
       const result = await storeFor(args.workspacePath).importFiles(args.projectId, [{ name: args.filename, data }])
       return projectResult(result.project, { imported: result.imported, errors: result.errors })
+    },
+  }))
+  ctx.tools.register(defineTool({
+    name: 'tavern_preset_convert_to_preset_plus',
+    description: '把项目内的 SillyTavern 预设转换成一个新的、尚未写入 Preset Plus 的 preset-plus-preset 项目资源。转换结果可在右侧预览并编辑，也可用 tavern_asset_save 修改；确认后再调用 tavern_preset_plus_write。动态 marker 会跳过并在结果中报告。',
+    parameters: {
+      projectId: { type: 'string', required: true },
+      assetId: { type: 'string', required: true, description: '项目内源酒馆预设资源 ID' },
+      presetId: { type: 'string', description: '目标 Preset Plus ID；省略时从预设名称生成' },
+      name: { type: 'string', description: '目标显示名称；省略时沿用酒馆预设名称' },
+      autoMode: { type: 'boolean', description: '是否自动注入，默认 true' },
+      workspacePath: workspaceParameter,
+    }, output,
+    async execute(args: { projectId: string; assetId: string; presetId?: string; name?: string; autoMode?: boolean; workspacePath?: string }) {
+      const store = storeFor(args.workspacePath)
+      const sourceProject = await store.get(args.projectId)
+      const source = findAsset(sourceProject, args.assetId)
+      const conversion = convertTavernPresetToPresetPlus(source, { id: args.presetId, name: args.name, autoMode: args.autoMode })
+      const preview = createAsset('preset', conversion.preset.name)
+      preview.format = 'preset-plus-preset'
+      preview.data = conversion.preset as unknown as JsonObject
+      const project = await store.update(args.projectId, value => { value.assets.push(preview) })
+      return projectResult(project, {
+        source: assetSummaryForAgent(findAsset(project, args.assetId)),
+        preview: assetSummaryForAgent(findAsset(project, preview.id)),
+        conversion: { sourceFormat: conversion.sourceFormat, converted: conversion.converted, skipped: conversion.skipped, warnings: conversion.warnings },
+        next: `检查并修改资源 ${preview.id}，确认后调用 tavern_preset_plus_write`,
+      })
+    },
+  }))
+  ctx.tools.register(defineTool({
+    name: 'tavern_preset_plus_write',
+    description: '把项目内已预览和修改完成的 preset-plus-preset 资源写入 Preset Plus。此工具不做酒馆格式转换；源资源必须先由 tavern_preset_convert_to_preset_plus 创建或具有合法的 Preset Plus 单预设结构。',
+    parameters: {
+      projectId: { type: 'string', required: true },
+      assetId: { type: 'string', required: true, description: '待写入的 preset-plus-preset 项目资源 ID' },
+      activate: { type: 'boolean', description: '写入后是否立即设为当前激活预设，默认 false' },
+      conflict: { type: 'string', enum: ['error', 'overwrite', 'rename'], description: '目标 ID 冲突策略，默认 error' },
+      workspacePath: workspaceParameter,
+    }, output,
+    async execute(args: { projectId: string; assetId: string; activate?: boolean; conflict?: string; workspacePath?: string }) {
+      const project = await storeFor(args.workspacePath).get(args.projectId)
+      const asset = findAsset(project, args.assetId)
+      const preset = presetPlusPresetFromAsset(asset)
+      const installed = await installPresetPlusPreset(preset, {
+        conflict: (args.conflict ?? 'error') as 'error' | 'overwrite' | 'rename',
+        activate: args.activate,
+      })
+      return toolResult({ installed, source: assetSummaryForAgent(asset) })
     },
   }))
   ctx.tools.register(defineTool({

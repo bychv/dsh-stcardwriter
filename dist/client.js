@@ -258,7 +258,90 @@ function EmbeddedWorldbookEditor({ asset, change }) {
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-embedded-preview", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Preview, { asset: bookAsset }) })
   ] });
 }
-function PresetEditor({ asset, change }) {
+function PresetPlusEditor({ asset, change }) {
+  const entries = Array.isArray(asset.data.entries) ? asset.data.entries : [];
+  const [selected, setSelected] = (0, import_react.useState)(0);
+  (0, import_react.useEffect)(() => {
+    setSelected(0);
+  }, [asset.id]);
+  const entry = entries[selected];
+  const alterRoot = (key, value) => change((next) => {
+    ;
+    next.data[key] = value;
+    if (key === "name" && typeof value === "string") next.name = value;
+  });
+  const alterEntry = (key, value) => change((next) => {
+    const list = Array.isArray(next.data.entries) ? next.data.entries : [];
+    if (list[selected]) list[selected][key] = value;
+  });
+  const add = () => change((next) => {
+    if (!Array.isArray(next.data.entries)) next.data.entries = [];
+    const list = next.data.entries;
+    list.push({ role: list.length === 0 ? "system" : "user", text: "", enabled: true });
+    setSelected(list.length - 1);
+  });
+  const remove = () => change((next) => {
+    const list = Array.isArray(next.data.entries) ? next.data.entries : [];
+    list.splice(selected, 1);
+    setSelected(Math.max(0, selected - 1));
+  });
+  const move = (offset) => change((next) => {
+    const list = Array.isArray(next.data.entries) ? next.data.entries : [];
+    const target = selected + offset;
+    if (!list[selected] || target < 0 || target >= list.length) return;
+    [list[selected], list[target]] = [list[target], list[selected]];
+    setSelected(target);
+  });
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-world-editor", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-entry-list", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: add, children: "\uFF0B \u65B0\u6761\u76EE" }),
+      entries.map((item, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", { className: selected === index ? "active" : "", onClick: () => setSelected(index), children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", { children: [
+          index + 1,
+          ". ",
+          item.role || "\u65E0\u89D2\u8272"
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: item.enabled === false ? "\u5DF2\u7981\u7528" : String(item.text || "").slice(0, 28) || "\uFF08\u7A7A\uFF09" })
+      ] }, index))
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-entry-form", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { label: "Preset Plus \u540D\u79F0", value: field(asset.data, "name"), onChange: (value) => alterRoot("name", value) }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { label: "Preset Plus ID", value: field(asset.data, "id"), onChange: (value) => alterRoot("id", value) }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-checks", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: asset.data.autoMode !== false, onChange: (event) => alterRoot("autoMode", event.target.checked) }),
+        "\u81EA\u52A8\u6CE8\u5165"
+      ] }) }),
+      entry ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-row", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [
+            "\u6761\u76EE ",
+            selected + 1
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { disabled: selected === 0, onClick: () => move(-1), children: "\u4E0A\u79FB" }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { disabled: selected === entries.length - 1, onClick: () => move(1), children: "\u4E0B\u79FB" }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "danger", onClick: remove, children: "\u5220\u9664" })
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { className: "stcw-field", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Role" }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", { value: String(entry.role || ""), onChange: (event) => alterEntry("role", event.target.value), children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "system", children: "system" }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "user", children: "user" }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "assistant", children: "assistant" })
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-checks", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: entry.enabled !== false, onChange: (event) => alterEntry("enabled", event.target.checked) }),
+          "\u542F\u7528"
+        ] }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { label: "\u63D0\u793A\u8BCD\u6B63\u6587", multiline: true, value: field(entry, "text"), onChange: (value) => alterEntry("text", value) }),
+        selected === 0 && (entry.role !== "system" || entry.enabled === false) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "stcw-probe-error", children: "Preset Plus \u8981\u6C42\u7B2C\u4E00\u6761\u662F\u5DF2\u542F\u7528\u7684 system \u6761\u76EE\uFF0C\u5199\u5165\u524D\u8BF7\u4FEE\u6B63\u3002" })
+      ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "stcw-hint", children: "\u81F3\u5C11\u6DFB\u52A0\u4E00\u4E2A\u5DF2\u542F\u7528\u7684 system \u6761\u76EE\u540E\u624D\u80FD\u5199\u5165 Preset Plus\u3002" })
+    ] })
+  ] });
+}
+function SillyTavernPresetEditor({ asset, change }) {
   const prompts = Array.isArray(asset.data.prompts) ? asset.data.prompts : [];
   const [selected, setSelected] = (0, import_react.useState)(0);
   const alterRoot = (key, value) => change((next) => {
@@ -308,6 +391,9 @@ function PresetEditor({ asset, change }) {
       ] })
     ] })
   ] });
+}
+function PresetEditor(props) {
+  return props.asset.format === "preset-plus-preset" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PresetPlusEditor, { ...props }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SillyTavernPresetEditor, { ...props });
 }
 function RawEditor({ asset, apply: apply2 }) {
   const [raw, setRaw] = (0, import_react.useState)(() => JSON.stringify(asset.data, null, 2));
@@ -396,6 +482,34 @@ function Preview({ asset }) {
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: Array.isArray(entry.key) ? entry.key.join(", ") : "" }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: entry.content })
       ] }, index))
+    ] });
+  }
+  if (asset.format === "preset-plus-preset") {
+    const entries = Array.isArray(asset.data.entries) ? asset.data.entries : [];
+    return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: "Preset Plus \u6CE8\u5165\u9884\u89C8" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-preview-note", children: [
+        "ID: ",
+        field(asset.data, "id") || "\u672A\u8BBE\u7F6E",
+        " \xB7 \u81EA\u52A8\u6CE8\u5165\uFF1A",
+        asset.data.autoMode === false ? "\u5173" : "\u5F00",
+        " \xB7 ",
+        entries.filter((entry) => entry?.enabled !== false).length,
+        "/",
+        entries.length,
+        " \u6761\u542F\u7528"
+      ] }),
+      entries.length ? entries.map((entry, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", { className: "stcw-prompt", style: entry?.enabled === false ? { opacity: 0.48 } : void 0, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", { children: [
+            index + 1,
+            ". ",
+            entry?.role || "\u65E0\u89D2\u8272"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: entry?.enabled === false ? "disabled" : "enabled" })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: typeof entry?.text === "string" && entry.text ? entry.text : "\uFF08\u7A7A\uFF09" })
+      ] }, index)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: "\u5C1A\u65E0\u6761\u76EE" })
     ] });
   }
   const prompts = Array.isArray(asset.data.prompts) ? asset.data.prompts : [];
@@ -563,7 +677,7 @@ function errorText(error) {
 function PresetPlusPanel() {
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "stcw-connector stcw-presetplus", children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-panel-title", children: "Preset Plus \u9884\u8BBE\u6CE8\u5165" }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "stcw-hint", children: "\u5F53\u524D\u201C\u9152\u9986\u521B\u4F5C\u6A21\u5F0F\u201D\u5DF2\u52A0\u5165 Preset Plus \u4F5C\u7528\u57DF\uFF0C\u4F1A\u5E94\u7528\u5176\u5F53\u524D\u6FC0\u6D3B\u9884\u8BBE\u3002\u9884\u8BBE\u5185\u5BB9\u3001\u542F\u7528\u72B6\u6001\u4E0E\u4F2A\u88C5\u6D88\u606F\u7EDF\u4E00\u5728 DSH \u8BBE\u7F6E\u91CC\u7684\u201C\u9884\u8BBE\u589E\u5F3A\u201D\u7BA1\u7406\u3002" })
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "stcw-hint", children: "\u5F53\u524D\u201C\u9152\u9986\u521B\u4F5C\u6A21\u5F0F\u201D\u5DF2\u52A0\u5165 Preset Plus \u4F5C\u7528\u57DF\uFF0C\u4F1A\u5E94\u7528\u5176\u5F53\u524D\u6FC0\u6D3B\u9884\u8BBE\u3002\u9152\u9986\u9884\u8BBE\u53EF\u7531 Agent \u8F6C\u6362\u6210\u9879\u76EE\u8349\u7A3F\uFF0C\u5728\u4E2D\u680F\u7F16\u8F91\u3001\u53F3\u680F\u9884\u89C8\uFF0C\u786E\u8BA4\u540E\u518D\u5199\u5165\uFF1B\u5DF2\u5199\u5165\u9884\u8BBE\u4ECD\u53EF\u5728 DSH \u8BBE\u7F6E\u91CC\u7684\u201C\u9884\u8BBE\u589E\u5F3A\u201D\u7BA1\u7406\u3002" })
   ] });
 }
 function ConnectorPanel({ project, accept, notice }) {

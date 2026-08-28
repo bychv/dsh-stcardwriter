@@ -7,7 +7,7 @@ import { createRequire } from 'node:module'
 import test from 'node:test'
 import { ensureAgentPreset, filterPresetPlusSection, PRESET_PLUS_SCOPES } from '../dist/index.js'
 
-test('bundle and client manifests target the rc8 plugin loaders', async () => {
+test('bundle and client manifests target the DSH plugin loaders', async () => {
   const pkg = JSON.parse(await readFile('package.json', 'utf8'))
   assert.equal(pkg.dsh.bundle.patch, './cordis.patch.yml')
   assert.equal(pkg.exports['./client'], './dist/client.js')
@@ -35,6 +35,8 @@ test('bundle and client manifests target the rc8 plugin loaders', async () => {
   assert.match(clientSource, /AI Harness 输入/)
   assert.match(clientSource, /迁移所选到当前角色卡/)
   assert.match(clientSource, /Preset Plus 预设注入/)
+  assert.match(clientSource, /Preset Plus 注入预览/)
+  assert.match(clientSource, /preset-plus-preset/)
   assert.doesNotMatch(clientSource, /DshSystemPromptPanel|\/system-prompt/)
   let registration
   Function('window', client)({ __ModuleLoader__: { load(value) { registration = value } } })
@@ -58,6 +60,9 @@ test('Tavern authoring Agent preset is bundled', async () => {
   assert.match(tools, /tavern_character_resource_read/)
   assert.match(tools, /tavern_character_patch/)
   assert.match(tools, /tavern_worldbook_entries_copy/)
+  assert.match(tools, /tavern_preset_convert_to_preset_plus/)
+  assert.match(tools, /tavern_preset_plus_write/)
+  assert.doesNotMatch(tools, /name: "tavern_preset_to_preset_plus"/)
   assert.match(tools, /tavern_asset_get/)
   assert.doesNotMatch(tools, /tavern_dsh_system_prompt/)
 })

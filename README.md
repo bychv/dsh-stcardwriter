@@ -36,7 +36,8 @@ dsh --profile web
 - Agent 项目读取采用低 token 分层：`tavern_project_get` 默认只返回资源和字段大小摘要，`tavern_asset_get` 再按字段读取，只有显式 `detail=full` / `fields=["*"]` 才返回完整 JSON。
 - Agent 可用 `tavern_character_patch` 修改指定角色字段而不重传整卡；随卡世界书和独立世界书均支持分页、单条读取、增改、删除。
 - `tavern_worldbook_entries_copy` 可在两张角色卡的内嵌世界书之间，或角色卡与独立世界书之间复制选定条目；ID 冲突可安全重编号、覆盖或跳过。
-- 酒馆创作预设包含 DSH rc8 标准模式的文件、搜索、Shell、后台任务、技能、目标、计划、压缩、子 Agent、工作流、提问、Todo 与 Web 工具，并在其上追加 `tavern_*` 工具。
+- `tavern_preset_convert_to_preset_plus` 只负责把 Chat Completion、System Prompt 或 Context 酒馆预设转换成项目内的 `preset-plus-preset` 草稿；可在中栏修改条目，并在右栏预览实际注入顺序。确认后再用 `tavern_preset_plus_write` 独立写入 Preset Plus，支持冲突改名/覆盖和写入后激活。动态 marker 会跳过并报告，不会伪造成静态提示词。
+- 酒馆创作预设包含 DSH `0.1.1-rc.2` 标准模式的文件、搜索、Shell、后台任务、技能、目标、计划、压缩、子 Agent、工作流、提问、Todo 与 Web 工具，并在其上追加 `tavern_*` 工具。
 - 导出角色卡 PNG、V3 JSON、V2 JSON、V1 JSON 或 CHARX；保留导入 PNG 的原图并重写元数据。
 - 酒馆连接器：填入本机酒馆安装根目录或用户数据目录，即可在工作台里浏览并勾选导入酒馆侧角色卡、世界书和五类预设；单张资源或整个项目可一键写回酒馆对应目录。
 - Agent 可用 `tavern_connect_*` / `tavern_remote_*` 工具完成同样的连接、列举、导入与导出。
@@ -93,7 +94,7 @@ dsh plugin --profile web add .
 
 - 角色卡：导入时保留原始对象；导出 V3 时补齐规范必需字段，额外字段继续保留。PNG 同时写入 V3 `ccv3` 和 V2 兼容 `chara` 文本块，并按规范读写 `chara-ext-asset_:{path}`。CHARX 保持根 `card.json` 与所有归档成员。
 - 世界书：使用 SillyTavern 的 `{ "entries": { "uid": entry } }` 结构；编辑器提供其常用激活、顺序、概率和递归字段，其他字段可从原始 JSON 编辑。
-- 预设：Chat Completion 使用 `prompts` + `prompt_order`；其他预设不进行猜测性转换。
+- 预设：Chat Completion 使用 `prompts` + `prompt_order`；原始 JSON 始终保真保存。转换到 Preset Plus 时仅提取可静态注入的提示词，动态 marker 会跳过并报告，纯参数型 Instruct/TextGen 预设不会被猜测性转换。
 
 ## 安全与限制
 

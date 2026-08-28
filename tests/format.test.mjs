@@ -200,7 +200,7 @@ test('project persistence externalizes PNG, attachments and binary data URIs fro
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-test('Agent projections satisfy the rc8 lossless-JSON contract', () => {
+test('Agent projections satisfy the DSH lossless-JSON contract', () => {
   const project = {
     id: 'blank', name: '空项目', createdAt: '2026-08-20T00:00:00.000Z', updatedAt: '2026-08-20T00:00:00.000Z',
     assets: [createAsset('character', '无来源角色')],
