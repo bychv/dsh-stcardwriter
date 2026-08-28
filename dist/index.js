@@ -2624,7 +2624,8 @@ function createApiHandler(storeOrResolver) {
 }
 
 // src/preset.ts
-import { copyFile, mkdir as mkdir3, readFile as readFile3, writeFile as writeFile3 } from "node:fs/promises";
+import { createHash as createHash3 } from "node:crypto";
+import { copyFile, mkdir as mkdir3, readFile as readFile3 } from "node:fs/promises";
 import { dirname as dirname3, join as join3 } from "node:path";
 import { fileURLToPath } from "node:url";
 async function exists(path) {
@@ -2637,20 +2638,27 @@ async function exists(path) {
 }
 var MANAGED_V2 = "# dsh-stcardwriter managed preset v2";
 var MANAGED_V3 = "# dsh-stcardwriter managed preset v3";
+var MANAGED_V3_SHA256 = "21402e1664557908b658169a1d24c2194f94c8d49a5c9ebca9d0ad7dfd11f353";
+function normalizedSha256(value) {
+  return createHash3("sha256").update(value.replace(/\r\n/g, "\n")).digest("hex");
+}
+function packagePresetRoot() {
+  const packageRoot = dirname3(dirname3(fileURLToPath(import.meta.url)));
+  return join3(packageRoot, "agent-presets", "tavern-authoring");
+}
 async function ensureAgentPreset() {
   const destination = join3(resolveDshHome(), ".agent-presets", "tavern-authoring");
   const target = join3(destination, "agent.cordis.yml");
   if (await exists(target)) {
     const current = await readFile3(target, "utf8");
-    if (current.startsWith(MANAGED_V2) && current.includes("    complete: true")) {
-      const migrated = current.replace(MANAGED_V2, MANAGED_V3).replace("    complete: true", "    complete: false");
-      await writeFile3(target, migrated, "utf8");
+    const v3Candidate = current.startsWith(MANAGED_V2) && current.includes("    complete: true") ? current.replace(MANAGED_V2, MANAGED_V3).replace("    complete: true", "    complete: false") : current;
+    if (v3Candidate.startsWith(MANAGED_V3) && normalizedSha256(v3Candidate) === MANAGED_V3_SHA256) {
+      await copyFile(join3(packagePresetRoot(), "agent.cordis.yml"), target);
       return { installed: false, updated: true, path: destination };
     }
     return { installed: false, updated: false, path: destination };
   }
-  const packageRoot = dirname3(dirname3(fileURLToPath(import.meta.url)));
-  const source = join3(packageRoot, "agent-presets", "tavern-authoring");
+  const source = packagePresetRoot();
   await mkdir3(destination, { recursive: true });
   await Promise.all([
     copyFile(join3(source, "agent.cordis.yml"), target),

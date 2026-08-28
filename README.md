@@ -3,9 +3,11 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-4b8f77.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-runtime-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 
-在 DeepSeek Harness 中创作、整理、预览和迁移 SillyTavern 角色卡、世界书与预设。当前插件版本：`0.5.1-rc.2`；npm 包名：`dsh-stcardwriter`，目前尚未发布到 npm。
+在 DeepSeek Harness 中创作、整理、预览和迁移 SillyTavern 角色卡、世界书与预设。当前插件版本：`0.5.2`；npm 包名：`dsh-stcardwriter`，目前尚未发布到 npm。
 
 面向 DeepSeek Harness `0.1.1-rc.2`，提供“酒馆创作模式”Agent 预设和三栏工作台：左侧连接 Harness 并管理项目，中间编辑资源，右侧实时预览。内置本地 SillyTavern 连接器；提示词与伪装消息注入由直接依赖的 [DSH Preset Plus](https://github.com/Rain-kl/dsh-preset-plus) 统一提供。
+
+当前本机运行验证基线仍是 DSH `0.1.1-rc.2`；另已在**不安装新版 DSH**的前提下，针对官方 `dsh-v0.1.2-alpha.3` 源码完成兼容检查。插件不再直接声明 0.1.2 已删除的 `@deepseek-ai/dsh-client-runtime`，UI 使用新版仍保留的三个插槽；托管 Agent 组合 v4 同时覆盖 0.1.1 与 0.1.2 的标准工具行。可用 `npm run check:dsh-compat -- <DSH 源码目录>` 复查。
 
 ## 快速安装
 
@@ -56,7 +58,7 @@ dsh --profile web
 npm install
 npm test
 npm pack
-dsh plugin --profile web add .\dsh-stcardwriter-0.5.1-rc.2.tgz
+dsh plugin --profile web add .\dsh-stcardwriter-0.5.2.tgz
 ```
 
 开发期也可以直接链接当前目录：
@@ -88,7 +90,9 @@ dsh plugin --profile web add .
 - 预设的创建、导入、导出、启用和激活统一在 DSH 设置页的「预设增强」中管理；本插件不再注册第二套 system prompt section，因此不存在双注入或两个 `complete` 段冲突。
 - 不要在同一个 profile 中再次单独安装 `@rain-kl/dsh-preset-plus`；它已经由本插件作为直接依赖加载。
 
-从旧版升级时，插件只会将带有 `# dsh-stcardwriter managed preset v2` 标记的受管组合迁移为 v3，使 persona 可与 Preset Plus 组合；其他自定义 Agent 预设不会被覆盖。
+Preset Plus 0.1.5 的客户端清单仍带有旧 `dsh-client-runtime` 包边，但其浏览器插件实际只注入 `slots` 服务并通过 `slots.inject("settings.section", ...)` 注册界面；在 DSH 0.1.2 中包边只用于信息展示，不决定激活顺序，因此该旧清单项不会阻塞加载。兼容检查脚本会同时验证这一点。
+
+从旧版升级时，插件只会将内容与曾发布版本**精确一致**的 managed v2/v3 组合迁移为 v4；迁移补齐目标命令、子 Agent 模型选择设置和 Web fetch。只要旧预设有任何用户修改，插件就不会覆盖。
 
 ## 格式策略
 
