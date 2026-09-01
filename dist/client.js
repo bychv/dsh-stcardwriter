@@ -91,6 +91,12 @@ function field(data, key) {
 function innerCharacter(asset) {
   return asset.data && typeof asset.data.data === "object" ? asset.data.data : asset.data;
 }
+function embeddedBookAsset(asset) {
+  if (asset.kind !== "character") return void 0;
+  const book = innerCharacter(asset).character_book;
+  if (!book || typeof book !== "object" || Array.isArray(book)) return void 0;
+  return { ...asset, kind: "worldbook", format: "worldbook", name: typeof book.name === "string" && book.name ? book.name : `${asset.name} \u4E16\u754C\u4E66`, data: book };
+}
 function TextField(props) {
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { className: "stcw-field", children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: props.label }),
@@ -154,36 +160,40 @@ function worldEntries(asset) {
   });
   return converted;
 }
-function WorldbookEditor({ asset, change }) {
+function WorldbookEditor({ asset, change, selected, onSelect }) {
   const entries = worldEntries(asset);
   const ids = Object.keys(entries).sort((a, b) => Number(a) - Number(b));
-  const [selected, setSelected] = (0, import_react.useState)(ids[0] || "");
+  const [internal, setInternal] = (0, import_react.useState)(ids[0] || "");
+  const current = selected !== void 0 ? selected : internal;
+  const pick = (id) => onSelect ? onSelect(id) : setInternal(id);
   (0, import_react.useEffect)(() => {
-    if (!entries[selected]) setSelected(ids[0] || "");
-  }, [asset.id, ids.join(","), selected]);
-  const entry = entries[selected];
+    if (!entries[current]) pick(ids[0] || "");
+  }, [asset.id, ids.join(","), current]);
+  const entry = entries[current];
   const alter = (key, value) => change((next) => {
     const all = worldEntries(next);
     next.data.entries = all;
-    if (all[selected]) all[selected][key] = value;
+    if (all[current]) all[current][key] = value;
   });
-  const add = () => change((next) => {
-    const all = worldEntries(next);
-    next.data.entries = all;
-    const numeric = Object.keys(all).map(Number).filter(Number.isFinite);
+  const add = () => {
+    const numeric = ids.map(Number).filter(Number.isFinite);
     const id = String((numeric.length ? Math.max(...numeric) : -1) + 1);
-    all[id] = { ...ENTRY_DEFAULTS, uid: Number(id) };
-    setSelected(id);
-  });
+    change((next) => {
+      const all = worldEntries(next);
+      next.data.entries = all;
+      all[id] = { ...ENTRY_DEFAULTS, uid: Number(id) };
+    });
+    pick(id);
+  };
   const remove = () => change((next) => {
     const all = worldEntries(next);
     next.data.entries = all;
-    delete all[selected];
+    delete all[current];
   });
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-world-editor", children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-entry-list", children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: add, children: "\uFF0B \u65B0\u6761\u76EE" }),
-      ids.map((id) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", { className: id === selected ? "active" : "", onClick: () => setSelected(id), children: [
+      ids.map((id) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", { className: id === current ? "active" : "", onClick: () => pick(id), children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: entries[id]?.comment || `\u6761\u76EE ${id}` }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: Array.isArray(entries[id]?.key) ? entries[id].key.join(", ") : "" })
       ] }, id))
@@ -192,14 +202,14 @@ function WorldbookEditor({ asset, change }) {
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-row", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [
           "\u6761\u76EE ",
-          selected
+          current
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "danger", onClick: remove, children: "\u5220\u9664" })
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { label: "\u6807\u9898 / \u5907\u6CE8", value: field(entry, "comment"), onChange: (value) => alter("comment", value) }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { label: "\u4E3B\u5173\u952E\u8BCD\uFF08\u9017\u53F7\u5206\u9694\uFF09", value: Array.isArray(entry.key) ? entry.key.join(", ") : "", onChange: (value) => alter("key", value.split(",").map((v) => v.trim()).filter(Boolean)) }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { label: "\u6B21\u5173\u952E\u8BCD\uFF08\u9017\u53F7\u5206\u9694\uFF09", value: Array.isArray(entry.keysecondary) ? entry.keysecondary.join(", ") : "", onChange: (value) => alter("keysecondary", value.split(",").map((v) => v.trim()).filter(Boolean)) }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { label: "\u6CE8\u5165\u5185\u5BB9", multiline: true, value: field(entry, "content"), onChange: (value) => alter("content", value) }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "stcw-hint", children: "\u300C\u6CE8\u5165\u5185\u5BB9\u300D\u5DF2\u6269\u5C55\u4E3A\u53F3\u4FA7\u6574\u680F\u7F16\u8F91\u7A97\uFF0C\u968F\u6761\u76EE\u9009\u62E9\u8054\u52A8\u3002" }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-grid2", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { label: "\u987A\u5E8F", value: String(entry.order ?? 100), onChange: (value) => alter("order", Number(value) || 0) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { label: "\u6DF1\u5EA6", value: String(entry.depth ?? 4), onChange: (value) => alter("depth", Number(value) || 0) }),
@@ -227,7 +237,7 @@ function WorldbookEditor({ asset, change }) {
     ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-empty", children: "\u65B0\u5EFA\u4E00\u4E2A\u4E16\u754C\u4E66\u6761\u76EE\u5F00\u59CB\u5199\u4F5C" }) })
   ] });
 }
-function EmbeddedWorldbookEditor({ asset, change }) {
+function EmbeddedWorldbookEditor({ asset, change, selected, onSelect }) {
   const data = innerCharacter(asset);
   const book = data.character_book && typeof data.character_book === "object" && !Array.isArray(data.character_book) ? data.character_book : void 0;
   const create = () => change((next) => {
@@ -243,7 +253,7 @@ function EmbeddedWorldbookEditor({ asset, change }) {
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "stcw-hint", children: "\u8FD9\u5F20\u89D2\u8272\u5361\u76EE\u524D\u6CA1\u6709 character_book\u3002" }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: create, children: "\uFF0B \u65B0\u5EFA\u5185\u5D4C\u4E16\u754C\u4E66" })
   ] });
-  const bookAsset = { ...asset, kind: "worldbook", format: "worldbook", name: typeof book.name === "string" ? book.name : `${asset.name} \u4E16\u754C\u4E66`, data: book };
+  const bookAsset = embeddedBookAsset(asset);
   const changeBook = (mutate) => change((next) => {
     const inner = innerCharacter(next);
     const nested = { ...next, kind: "worldbook", format: "worldbook", data: inner.character_book };
@@ -261,7 +271,7 @@ function EmbeddedWorldbookEditor({ asset, change }) {
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "danger", onClick: remove, children: "\u79FB\u9664\u5185\u5D4C\u4E16\u754C\u4E66" })
     ] }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { label: "\u4E16\u754C\u4E66\u6807\u9898", value: typeof book.name === "string" ? book.name : "", onChange: rename }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorldbookEditor, { asset: bookAsset, change: changeBook }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorldbookEditor, { asset: bookAsset, change: changeBook, selected, onSelect }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-embedded-preview", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Preview, { asset: bookAsset }) })
   ] });
 }
@@ -553,6 +563,77 @@ function Preview({ asset }) {
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: prompt.marker ? `\u3014SillyTavern \u52A8\u6001\u7247\u6BB5\uFF1A${prompt.identifier}\u3015` : prompt.content || "\uFF08\u7A7A\uFF09" })
     ] }, String(prompt.identifier ?? index))) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: field(asset.data, "story_string") || field(asset.data, "input_sequence") || JSON.stringify(asset.data, null, 2) })
+  ] });
+}
+var WI_ROLE_LABEL = { 0: "system", 1: "user", 2: "assistant" };
+function stringList(value) {
+  return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+}
+function LoreContentEditor({ lore }) {
+  const entry = lore.entry;
+  if (!entry) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-empty stcw-content-empty", children: "\u5148\u5728\u4E16\u754C\u4E66\u91CC\u65B0\u5EFA\u4E00\u4E2A\u6761\u76EE\uFF0C\u518D\u5728\u8FD9\u91CC\u64B0\u5199\u6CE8\u5165\u5185\u5BB9\u3002" });
+  const alter = (key, value) => lore.change((next) => {
+    const all = worldEntries(next);
+    next.data.entries = all;
+    if (all[lore.entryId]) all[lore.entryId][key] = value;
+  });
+  const content = field(entry, "content");
+  const keys = stringList(entry.key);
+  const secondary = stringList(entry.keysecondary);
+  const position = Number(entry.position ?? 0);
+  const ids = Object.keys(worldEntries(lore.book)).sort((a, b) => Number(a) - Number(b));
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-content-editor", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-content-head", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", { value: lore.entryId, onChange: (event) => lore.select(event.target.value), title: "\u5207\u6362\u8981\u7F16\u8F91\u7684\u6761\u76EE", children: ids.map((id) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: id, children: worldEntries(lore.book)[id]?.comment || `\u6761\u76EE ${id}` }, id)) }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: lore.embedded ? `\u5185\u5D4C\u4E16\u754C\u4E66 \xB7 ${lore.book.name}` : field(lore.book.data, "name") || lore.book.name })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-content-chips", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: entry.constant === true ? "on" : "", children: entry.constant === true ? "\u5E38\u9A7B\u6CE8\u5165" : "\u5173\u952E\u8BCD\u89E6\u53D1" }),
+      entry.disable === true && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "off", children: "\u5DF2\u7981\u7528" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+        "order ",
+        Number(entry.order ?? 100)
+      ] }),
+      position === 4 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+        "@D",
+        Number(entry.depth ?? 4),
+        " \xB7 ",
+        WI_ROLE_LABEL[Number(entry.role) || 0] || "system"
+      ] }),
+      position !== 0 && position !== 4 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+        "\u4F4D\u7F6E ",
+        position
+      ] })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-keyword-row", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: "\u4E3B\u5173\u952E\u8BCD" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: keys.length ? keys.map((keyword, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: keyword }, keyword + "-" + index)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "\u672A\u8BBE\u7F6E\uFF08\u4EC5\u5E38\u9A7B\u751F\u6548\uFF09" }) })
+    ] }),
+    entry.selective !== false && secondary.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-keyword-row", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: "\u6B21\u5173\u952E\u8BCD" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: secondary.map((keyword, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: keyword }, keyword + "-" + index)) })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", { className: "stcw-content-input", value: content, onChange: (event) => alter("content", event.target.value), placeholder: "\u64B0\u5199\u8BE5\u6761\u76EE\u5B9E\u9645\u6CE8\u5165\u5230\u9152\u9986\u63D0\u793A\u8BCD\u4E2D\u7684\u6B63\u6587\u2026" }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-content-foot", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+        content.length,
+        " \u5B57\u7B26"
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: lore.embedded ? "\u968F\u89D2\u8272\u5361 character_book \u4E00\u8D77\u5BFC\u51FA" : "\u4FDD\u5B58\u4E8E\u4E16\u754C\u4E66\u6761\u76EE content \u5B57\u6BB5" })
+    ] })
+  ] });
+}
+function PreviewPane({ asset, lore }) {
+  const [legacy, setLegacy] = (0, import_react.useState)(false);
+  (0, import_react.useEffect)(() => {
+    setLegacy(false);
+  }, [asset?.id]);
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", { className: "stcw-preview", children: [
+    lore ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-preview-tabs", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: legacy ? "" : "active", onClick: () => setLegacy(false), children: "\u6CE8\u5165\u5185\u5BB9" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: legacy ? "active" : "", onClick: () => setLegacy(true), children: "\u8D44\u6E90\u5B9E\u65F6\u9884\u89C8" })
+    ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-preview-title", children: "\u8D44\u6E90\u5B9E\u65F6\u9884\u89C8" }),
+    lore && !legacy ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoreContentEditor, { lore }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-preview-scroll", children: asset ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Preview, { asset }) : null })
   ] });
 }
 function embeddedPath(uri) {
@@ -871,6 +952,7 @@ function Workbench(props) {
   const [project, setProject] = (0, import_react.useState)(null);
   const [selectedId, setSelectedId] = (0, import_react.useState)("");
   const [notice, setNotice] = (0, import_react.useState)("");
+  const [loreEntryId, setLoreEntryId] = (0, import_react.useState)("");
   const asset = project?.assets.find((value) => value.id === selectedId) || project?.assets[0];
   const loadProjects = async (preferred) => {
     const result = await api("/projects");
@@ -886,8 +968,12 @@ function Workbench(props) {
     setProject(null);
     setProjects([]);
     setSelectedId("");
+    setLoreEntryId("");
     if (isOpen && workspacePath) void loadProjects().catch((error) => setNotice(error.message));
   }, [isOpen, workspacePath]);
+  (0, import_react.useEffect)(() => {
+    setLoreEntryId("");
+  }, [asset?.id]);
   if (!isOpen) return null;
   if (!workspacePath) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-layer", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-workbench", children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { children: [
@@ -933,6 +1019,31 @@ function Workbench(props) {
     if (selected) mutate(selected);
     return next;
   });
+  const loreBook = !asset ? void 0 : asset.kind === "worldbook" ? asset : asset.kind === "character" ? embeddedBookAsset(asset) : void 0;
+  const loreEntries = loreBook ? worldEntries(loreBook) : {};
+  const loreIds = Object.keys(loreEntries).sort((a, b) => Number(a) - Number(b));
+  const loreEntryIdCurrent = loreEntries[loreEntryId] ? loreEntryId : loreIds[0] || "";
+  const changeLoreBook = (mutate) => {
+    if (!asset) return;
+    if (asset.kind === "worldbook") {
+      changeAsset(mutate);
+      return;
+    }
+    changeAsset((next) => {
+      const inner = innerCharacter(next);
+      const nested = { ...next, kind: "worldbook", format: "worldbook", data: inner.character_book };
+      mutate(nested);
+      inner.character_book = nested.data;
+    });
+  };
+  const lore = loreBook ? {
+    book: loreBook,
+    entryId: loreEntryIdCurrent,
+    entry: loreEntries[loreEntryIdCurrent],
+    embedded: asset.kind === "character",
+    select: setLoreEntryId,
+    change: changeLoreBook
+  } : void 0;
   const save = async () => {
     if (!project || !asset) return;
     const result = await api(`/projects/${project.id}/assets/${asset.id}`, { method: "PUT", body: JSON.stringify({ asset }) });
@@ -1068,16 +1179,13 @@ function Workbench(props) {
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResourceInspector, { asset }),
             asset.kind === "character" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CharacterEditor, { asset, change: changeAsset }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EmbeddedWorldbookEditor, { asset, change: changeAsset })
-            ] }) : asset.kind === "worldbook" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorldbookEditor, { asset, change: changeAsset }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PresetEditor, { asset, change: changeAsset }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EmbeddedWorldbookEditor, { asset, change: changeAsset, selected: loreEntryIdCurrent, onSelect: setLoreEntryId })
+            ] }) : asset.kind === "worldbook" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorldbookEditor, { asset, change: changeAsset, selected: loreEntryIdCurrent, onSelect: setLoreEntryId }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PresetEditor, { asset, change: changeAsset }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RawEditor, { asset, apply: (data) => changeAsset((next) => {
               next.data = data;
             }) })
           ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-empty", children: "\u8BF7\u9009\u62E9\u6216\u65B0\u5EFA\u4E00\u4E2A\u8D44\u6E90" }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", { className: "stcw-preview", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-preview-title", children: "\u8D44\u6E90\u5B9E\u65F6\u9884\u89C8" }),
-            asset ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Preview, { asset }) : null
-          ] })
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PreviewPane, { asset, lore })
         ] }) })
       ] })
     ] })
@@ -1088,7 +1196,7 @@ var CSS = `
 .stcw-layer{position:fixed;inset:0;z-index:10000;background:rgba(8,7,12,.7);backdrop-filter:blur(8px);pointer-events:auto;padding:20px;color:#eee;font:14px/1.45 Inter,system-ui,sans-serif}.stcw-workbench{height:100%;display:flex;flex-direction:column;background:#15121d;border:1px solid #3a3347;border-radius:16px;box-shadow:0 24px 80px #0009;overflow:hidden}.stcw-workbench header{height:58px;padding:0 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #302a3a;background:#1c1825}.stcw-workbench header>div{display:flex;align-items:center;gap:12px}.stcw-workbench button,.stcw-button,.stcw-file{border:1px solid #51475f;background:#282232;color:#eee;padding:7px 10px;border-radius:7px;cursor:pointer;text-decoration:none}.stcw-workbench button:hover,.stcw-button:hover,.stcw-file:hover{background:#373043}.stcw-button.disabled{opacity:.45;cursor:not-allowed;pointer-events:none}.stcw-workbench button.danger{border-color:#7a3f4b;color:#ffabb8}.stcw-close{font-size:24px!important;line-height:1;padding:5px 10px!important}.stcw-workbench select,.stcw-workbench input,.stcw-workbench textarea{background:#100e16;color:#eee;border:1px solid #463d52;border-radius:6px;padding:8px;box-sizing:border-box}.stcw-file input{display:none}.stcw-toolbar{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid #302a3a;overflow-x:auto}.stcw-project-name{font-weight:700;width:220px;flex:0 0 auto}.stcw-notice{color:#b9a7cf;margin-left:auto;white-space:nowrap}.stcw-columns{display:grid;grid-template-columns:230px minmax(420px,1fr) 360px;min-height:0;flex:1}.stcw-assets,.stcw-editor,.stcw-preview{min-height:0;overflow:auto}.stcw-assets{padding:9px;border-right:1px solid #302a3a}.stcw-assets>button{display:grid;width:100%;text-align:left;margin-bottom:7px;grid-template-columns:auto 1fr;gap:2px 8px}.stcw-assets>button>span{grid-row:1/3;background:#493c5b;color:#d8c8ec;font-size:11px;padding:3px 5px;border-radius:4px;align-self:center}.stcw-assets small,.stcw-entry-list small{color:#9d91a9}.stcw-assets .active,.stcw-entry-list .active{border-color:#9b75ce;background:#392c4a}.stcw-editor{padding:14px}.stcw-editor-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:14px;position:sticky;top:-14px;background:#15121ded;padding:10px 0;z-index:2}.stcw-editor-head>div{display:flex;gap:7px;align-items:center}.stcw-editor-head input{font-size:18px;font-weight:700}.stcw-form{display:flex;flex-direction:column;gap:10px}.stcw-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.stcw-field{display:flex;flex-direction:column;gap:5px}.stcw-field>span{color:#bcaec9;font-size:12px}.stcw-field textarea{width:100%;resize:vertical}.stcw-world-editor{display:grid;grid-template-columns:180px 1fr;gap:12px}.stcw-entry-list{display:flex;flex-direction:column;gap:6px;max-height:68vh;overflow:auto}.stcw-entry-list>button{display:flex;flex-direction:column;text-align:left}.stcw-entry-form{display:flex;flex-direction:column;gap:10px}.stcw-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.stcw-checks{display:flex;gap:14px;flex-wrap:wrap}.stcw-checks label{display:flex;align-items:center;gap:5px}.stcw-raw{margin-top:18px;border-top:1px solid #342d3e;padding-top:12px}.stcw-raw summary{cursor:pointer;color:#bda5d8}.stcw-raw textarea{width:100%;font:12px/1.45 ui-monospace,monospace;margin-top:8px}.stcw-preview{border-left:1px solid #302a3a;background:#100e16;padding:15px}.stcw-preview-title{text-transform:uppercase;letter-spacing:.14em;font-size:11px;color:#a28eaf;margin-bottom:12px}.stcw-preview pre{white-space:pre-wrap;word-break:break-word;font:13px/1.55 inherit}.stcw-avatar{width:72px;height:72px;border-radius:50%;display:grid;place-items:center;margin:10px auto;background:linear-gradient(135deg,#9a67cc,#4d78bd);font-size:30px}.stcw-preview-card h2{text-align:center}.stcw-tags{display:flex;justify-content:center;flex-wrap:wrap;gap:5px}.stcw-tags span{background:#332740;padding:3px 7px;border-radius:20px;font-size:11px}.stcw-lore-hit,.stcw-prompt{border:1px solid #3b3247;border-radius:8px;padding:10px;margin:9px 0;background:#191520}.stcw-lore-hit small{display:block;color:#a795b7}.stcw-prompt>div{display:flex;justify-content:space-between}.stcw-prompt span{color:#a795b7}.stcw-preview-note,.stcw-hint{color:#a99ab7;font-size:12px}.stcw-empty,.stcw-welcome{display:grid;place-content:center;text-align:center;color:#9f93aa;min-height:180px}.stcw-welcome{flex:1}.stcw-welcome button{justify-self:center}@media(max-width:1050px){.stcw-columns{grid-template-columns:180px minmax(380px,1fr) 300px}}`;
 var EXTRA_CSS = `
 .stcw-composer-button{border:0;background:transparent;color:inherit;padding:4px 7px;border-radius:6px;cursor:pointer}.stcw-composer-button:hover{background:color-mix(in srgb,currentColor 10%,transparent)}
-.stcw-studio{display:grid;grid-template-columns:330px minmax(0,1fr);min-height:0;flex:1}.stcw-ai-pane{min-height:0;overflow:auto;padding:12px;border-right:1px solid #302a3a;background:#121019}.stcw-resource-pane{min-width:0;min-height:0}.stcw-resource-grid{height:100%;display:grid;grid-template-columns:minmax(480px,1fr) minmax(300px,36%);min-height:0}.stcw-panel-title{text-transform:uppercase;letter-spacing:.12em;font-size:11px;color:#aa95ba;margin:3px 0 9px}.stcw-harness{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-harness textarea{width:100%;resize:vertical}.stcw-harness-actions{display:flex;gap:7px;margin-top:8px}.stcw-harness-actions button{flex:1}.stcw-workbench button.primary{background:#694697;border-color:#9367c8}.stcw-workbench button:disabled{opacity:.45;cursor:not-allowed}.stcw-ai-pane>.stcw-assets{border:0;padding:0;max-height:35vh;overflow:auto}.stcw-migrate{margin-top:12px;border-top:1px solid #302a3a;padding-top:10px}.stcw-migrate summary,.stcw-resources summary{cursor:pointer;color:#ccb5e6;font-weight:700;margin-bottom:9px}.stcw-migrate-list{max-height:190px;overflow:auto;margin:8px 0}.stcw-migrate-list label{display:flex;gap:7px;padding:6px;border-radius:6px}.stcw-migrate-list label:hover{background:#211b29}.stcw-migrate-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-migrate-list small{color:#9e90aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-safe-note{color:#aee6c1;background:#153421;padding:7px;border-radius:6px;font-size:12px}.stcw-resources{border:1px solid #3d3548;border-radius:8px;padding:9px;margin-bottom:12px}.stcw-resource-badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px}.stcw-resource-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-resource-badges span.ok{background:#16422a;color:#aee6c1}.stcw-resource-row{display:grid;grid-template-columns:minmax(100px,1fr) auto;gap:2px 8px;padding:6px;border-top:1px solid #2e2736}.stcw-resource-row code{grid-column:1/3;color:#9f90ae;word-break:break-all}.stcw-resource-row em{grid-column:1/3;color:#ffafba}.stcw-workbench header small{color:#998ca5;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-connector{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-connector summary{cursor:pointer;color:#ccb5e6;font-weight:700}.stcw-connector input:not([type=checkbox]){width:100%}.stcw-connector .stcw-row{margin:8px 0;gap:6px}.stcw-connector .stcw-row input{flex:1}.stcw-connector .stcw-row select{flex:0 0 auto}.stcw-connector button{margin-top:4px}.stcw-connector button.danger{margin-top:10px}.stcw-probe-result{margin-top:9px;display:flex;flex-direction:column;gap:7px}.stcw-probe-error{color:#ffafba;background:#3a1b22;padding:7px;border-radius:6px;font-size:12px}.stcw-cat-badges{display:flex;gap:5px;flex-wrap:wrap;margin:4px 0}.stcw-cat-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-cat-badges span.ok{background:#16422a;color:#aee6c1}.stcw-remote-group{margin-top:8px;border-top:1px solid #302a3a;padding-top:7px}.stcw-remote-group summary{font-weight:600;color:#c9b6de;cursor:pointer}.stcw-remote-all{display:flex;gap:7px;align-items:center;margin:5px 0}.stcw-remote-list{max-height:190px;overflow:auto;margin:4px 0}.stcw-remote-list label{display:flex;gap:7px;align-items:center;padding:4px 5px;border-radius:6px}.stcw-remote-list label:hover{background:#211b29}.stcw-remote-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-remote-list label b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-remote-list small{color:#9e90aa}.stcw-dshprompt{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-dshprompt .stcw-field{margin:9px 0}.stcw-dshprompt textarea{width:100%;resize:vertical}.stcw-dshprompt .stcw-row{margin-top:9px}.stcw-dshprompt .stcw-row .stcw-hint{flex:1}@media(max-width:1150px){.stcw-studio{grid-template-columns:285px minmax(0,1fr)}.stcw-resource-grid{grid-template-columns:minmax(420px,1fr) 300px}}`;
+.stcw-studio{display:grid;grid-template-columns:330px minmax(0,1fr);min-height:0;flex:1}.stcw-ai-pane{min-height:0;overflow:auto;padding:12px;border-right:1px solid #302a3a;background:#121019}.stcw-resource-pane{min-width:0;min-height:0}.stcw-resource-grid{height:100%;display:grid;grid-template-columns:minmax(420px,1fr) minmax(320px,40%);min-height:0}.stcw-panel-title{text-transform:uppercase;letter-spacing:.12em;font-size:11px;color:#aa95ba;margin:3px 0 9px}.stcw-harness{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-harness textarea{width:100%;resize:vertical}.stcw-harness-actions{display:flex;gap:7px;margin-top:8px}.stcw-harness-actions button{flex:1}.stcw-workbench button.primary{background:#694697;border-color:#9367c8}.stcw-workbench button:disabled{opacity:.45;cursor:not-allowed}.stcw-ai-pane>.stcw-assets{border:0;padding:0;max-height:35vh;overflow:auto}.stcw-migrate{margin-top:12px;border-top:1px solid #302a3a;padding-top:10px}.stcw-migrate summary,.stcw-resources summary{cursor:pointer;color:#ccb5e6;font-weight:700;margin-bottom:9px}.stcw-migrate-list{max-height:190px;overflow:auto;margin:8px 0}.stcw-migrate-list label{display:flex;gap:7px;padding:6px;border-radius:6px}.stcw-migrate-list label:hover{background:#211b29}.stcw-migrate-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-migrate-list small{color:#9e90aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-safe-note{color:#aee6c1;background:#153421;padding:7px;border-radius:6px;font-size:12px}.stcw-resources{border:1px solid #3d3548;border-radius:8px;padding:9px;margin-bottom:12px}.stcw-resource-badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px}.stcw-resource-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-resource-badges span.ok{background:#16422a;color:#aee6c1}.stcw-resource-row{display:grid;grid-template-columns:minmax(100px,1fr) auto;gap:2px 8px;padding:6px;border-top:1px solid #2e2736}.stcw-resource-row code{grid-column:1/3;color:#9f90ae;word-break:break-all}.stcw-resource-row em{grid-column:1/3;color:#ffafba}.stcw-workbench header small{color:#998ca5;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-connector{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-connector summary{cursor:pointer;color:#ccb5e6;font-weight:700}.stcw-connector input:not([type=checkbox]){width:100%}.stcw-connector .stcw-row{margin:8px 0;gap:6px}.stcw-connector .stcw-row input{flex:1}.stcw-connector .stcw-row select{flex:0 0 auto}.stcw-connector button{margin-top:4px}.stcw-connector button.danger{margin-top:10px}.stcw-probe-result{margin-top:9px;display:flex;flex-direction:column;gap:7px}.stcw-probe-error{color:#ffafba;background:#3a1b22;padding:7px;border-radius:6px;font-size:12px}.stcw-cat-badges{display:flex;gap:5px;flex-wrap:wrap;margin:4px 0}.stcw-cat-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-cat-badges span.ok{background:#16422a;color:#aee6c1}.stcw-remote-group{margin-top:8px;border-top:1px solid #302a3a;padding-top:7px}.stcw-remote-group summary{font-weight:600;color:#c9b6de;cursor:pointer}.stcw-remote-all{display:flex;gap:7px;align-items:center;margin:5px 0}.stcw-remote-list{max-height:190px;overflow:auto;margin:4px 0}.stcw-remote-list label{display:flex;gap:7px;align-items:center;padding:4px 5px;border-radius:6px}.stcw-remote-list label:hover{background:#211b29}.stcw-remote-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-remote-list label b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-remote-list small{color:#9e90aa}.stcw-dshprompt{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-dshprompt .stcw-field{margin:9px 0}.stcw-dshprompt textarea{width:100%;resize:vertical}.stcw-dshprompt .stcw-row{margin-top:9px}.stcw-dshprompt .stcw-row .stcw-hint{flex:1}.stcw-preview{display:flex;flex-direction:column;overflow:hidden}.stcw-preview-tabs{display:flex;gap:6px;margin-bottom:12px}.stcw-preview-tabs button{flex:1;padding:6px 8px;font-size:12px;border-radius:7px;line-height:1.3}.stcw-preview-tabs button.active{border-color:#9b75ce;background:#392c4a}.stcw-preview-scroll{flex:1;min-height:0;overflow:auto}.stcw-content-editor{flex:1;min-height:0;display:flex;flex-direction:column;gap:9px;overflow:auto}.stcw-content-head{display:flex;justify-content:space-between;align-items:center;gap:8px}.stcw-content-head select{max-width:60%}.stcw-content-head span{color:#a795b7;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 0 auto}.stcw-content-chips{display:flex;gap:5px;flex-wrap:wrap}.stcw-content-chips span{border:1px solid #4a4056;border-radius:12px;padding:2px 7px;font-size:11px;color:#c5b8d4}.stcw-content-chips span.on{border-color:#3f8b61;background:#1e5034;color:#c5f4d5}.stcw-content-chips span.off{border-color:#7a3f4b;color:#ffabb8}.stcw-content-editor .stcw-keyword-row{margin-top:0}.stcw-content-input{flex:1;min-height:180px;width:100%;resize:none;font-size:14px;line-height:1.6}.stcw-content-foot{display:flex;justify-content:space-between;gap:8px;color:#8d8299;font-size:11px}.stcw-content-empty{flex:1}@media(max-width:1150px){.stcw-studio{grid-template-columns:285px minmax(0,1fr)}.stcw-resource-grid{grid-template-columns:minmax(380px,1fr) minmax(300px,330px)}}`;
 var EMBEDDED_CSS = `.stcw-embedded-book{margin-top:18px;border:1px solid #493b57;border-radius:9px;padding:10px}.stcw-embedded-book>summary{cursor:pointer;color:#d1b6ea;font-weight:700}.stcw-embedded-book>.stcw-field{margin:12px 0}.stcw-embedded-book>.stcw-world-editor{margin-top:12px}.stcw-embedded-preview{margin-top:14px;border-top:1px solid #342d3e;padding-top:10px}.stcw-lore-hit.inactive{opacity:.62}.stcw-lore-hit.active{border-color:#397452;background:#14251c}.stcw-lore-head{display:flex;justify-content:space-between;gap:8px}.stcw-lore-head span{color:#b6a6c4;font-size:11px}.stcw-keyword-row{margin-top:8px}.stcw-keyword-row>small{display:block;color:#a795b7;margin-bottom:4px}.stcw-keyword-row>div{display:flex;gap:4px;flex-wrap:wrap}.stcw-keyword-row span{border:1px solid #4a4056;border-radius:12px;padding:2px 6px;font-size:11px}.stcw-keyword-row span.matched{border-color:#3f8b61;background:#1e5034;color:#c5f4d5}.stcw-keyword-row em{color:#786e81;font-size:11px}`;
 function installStyle() {
   const style = document.createElement("style");

@@ -3,9 +3,9 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-4b8f77.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-runtime-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 
-在 DeepSeek Harness 中创作、整理、预览和迁移 SillyTavern 角色卡、世界书与预设。当前插件版本：`0.5.2`；npm 包名：`dsh-stcardwriter`，目前尚未发布到 npm。
+在 DeepSeek Harness 中创作、整理、预览和迁移 SillyTavern 角色卡、世界书与预设。当前插件版本：`0.5.2-alpha.2`；npm 包名：`dsh-stcardwriter`，目前尚未发布到 npm。
 
-面向 DeepSeek Harness `0.1.1-rc.2`，提供“酒馆创作模式”Agent 预设和三栏工作台：左侧连接 Harness 并管理项目，中间编辑资源，右侧实时预览。内置本地 SillyTavern 连接器；提示词与伪装消息注入由直接依赖的 [DSH Preset Plus](https://github.com/Rain-kl/dsh-preset-plus) 统一提供。
+面向 DeepSeek Harness `0.1.1-rc.2`，提供“酒馆创作模式”Agent 预设和三栏工作台：左侧连接 Harness 并管理项目，中间编辑资源，右侧整栏编辑世界书注入内容并可切换实时预览。内置本地 SillyTavern 连接器；提示词与伪装消息注入由直接依赖的 [DSH Preset Plus](https://github.com/Rain-kl/dsh-preset-plus) 统一提供。
 
 当前本机运行验证基线仍是 DSH `0.1.1-rc.2`；另已在**不安装新版 DSH**的前提下，针对官方 `dsh-v0.1.2-alpha.3` 源码完成兼容检查。插件不再直接声明 0.1.2 已删除的 `@deepseek-ai/dsh-client-runtime`，UI 使用新版仍保留的三个插槽；托管 Agent 组合 v4 同时覆盖 0.1.1 与 0.1.2 的标准工具行。可用 `npm run check:dsh-compat -- <DSH 源码目录>` 复查。
 
@@ -44,7 +44,7 @@ dsh --profile web
 - 酒馆连接器：填入本机酒馆安装根目录或用户数据目录，即可在工作台里浏览并勾选导入酒馆侧角色卡、世界书和五类预设；单张资源或整个项目可一键写回酒馆对应目录。
 - Agent 可用 `tavern_connect_*` / `tavern_remote_*` 工具完成同样的连接、列举、导入与导出。
 - 直接集成 `@rain-kl/dsh-preset-plus`：保留其 `preset-plus` 独立模式，并把 `tavern-authoring` 加入注入作用域；在酒馆创作模式中可同时使用完整 `tavern_*` 工具和 Preset Plus 当前激活预设。
-- 编辑 SillyTavern 世界书原生条目并在右栏测试主/次关键词逻辑。
+- 编辑 SillyTavern 世界书原生条目；右栏整栏是当前条目的「注入内容」编辑窗（角色卡内嵌世界书同样适用，随条目选择联动），点击「资源实时预览」可切回原右栏预览。
 - 编辑 Chat Completion 提示列表并按 `prompt_order` 预览；Context、Instruct、TextGen 预设可保真编辑原始 JSON。
 - 项目整体导出 ZIP，按 `characters/`、`worldbooks/`、`presets/` 分类。
 - 原始 JSON 是持久化真源；结构化编辑不会主动删除未知字段或 `extensions`。
@@ -58,7 +58,7 @@ dsh --profile web
 npm install
 npm test
 npm pack
-dsh plugin --profile web add .\dsh-stcardwriter-0.5.2.tgz
+dsh plugin --profile web add .\dsh-stcardwriter-0.5.2-alpha.2.tgz
 ```
 
 开发期也可以直接链接当前目录：
@@ -107,7 +107,7 @@ Preset Plus 0.1.5 的客户端清单仍带有旧 `dsh-client-runtime` 包边，�
 - 单次导入请求上限 80 MiB。
 - 连接器对酒馆目录的写入严格限制在七类资源子目录内，文件名净化后仍做越界检查，写入采用原子替换；连接器不提供删除酒馆文件的能力。
 - Preset Plus 由 bundle 统一加载一次，并只对 `preset-plus`、`tavern-authoring` 两个模式启用。
-- 右栏的世界书预览用于写作反馈，覆盖关键词、AND/NOT 选择逻辑；最终 token 预算、递归、分组竞争和概率结果仍以 SillyTavern 运行时为准。
+- 右栏默认是所选世界书条目的「注入内容」整栏编辑窗（含角色卡内嵌世界书）；点击「资源实时预览」切回原预览，触发预览覆盖关键词、AND/NOT 选择逻辑。最终 token 预算、递归、分组竞争和概率结果仍以 SillyTavern 运行时为准。
 
 ## 致谢与贡献说明
 

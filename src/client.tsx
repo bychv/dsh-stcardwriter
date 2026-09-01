@@ -53,6 +53,13 @@ function HarnessComposerAction({ sessionId, inputActions }: { sessionId: string;
 function field(data: any, key: string): string { return typeof data?.[key] === 'string' ? data[key] : '' }
 function innerCharacter(asset: TavernAsset): any { return asset.data && typeof asset.data.data === 'object' ? asset.data.data : asset.data }
 
+function embeddedBookAsset(asset: TavernAsset): TavernAsset | undefined {
+  if (asset.kind !== 'character') return undefined
+  const book = innerCharacter(asset).character_book
+  if (!book || typeof book !== 'object' || Array.isArray(book)) return undefined
+  return { ...asset, kind: 'worldbook' as const, format: 'worldbook' as const, name: typeof book.name === 'string' && book.name ? book.name : `${asset.name} 世界书`, data: book }
+}
+
 function TextField(props: { label: string; value: string; multiline?: boolean; onChange: (value: string) => void }) {
   return <label className="stcw-field"><span>{props.label}</span>{props.multiline
     ? <textarea value={props.value} rows={5} onChange={event => props.onChange(event.target.value)} />
@@ -101,41 +108,45 @@ function worldEntries(asset: TavernAsset): Record<string, any> {
   return converted
 }
 
-function WorldbookEditor({ asset, change }: { asset: TavernAsset; change: (mutate: (asset: TavernAsset) => void) => void }) {
+function WorldbookEditor({ asset, change, selected, onSelect }: { asset: TavernAsset; change: (mutate: (asset: TavernAsset) => void) => void; selected?: string; onSelect?: (id: string) => void }) {
   const entries = worldEntries(asset)
   const ids = Object.keys(entries).sort((a, b) => Number(a) - Number(b))
-  const [selected, setSelected] = useState(ids[0] || '')
-  useEffect(() => { if (!entries[selected]) setSelected(ids[0] || '') }, [asset.id, ids.join(','), selected])
-  const entry = entries[selected]
+  const [internal, setInternal] = useState(ids[0] || '')
+  const current = selected !== undefined ? selected : internal
+  const pick = (id: string) => (onSelect ? onSelect(id) : setInternal(id))
+  useEffect(() => { if (!entries[current]) pick(ids[0] || '') }, [asset.id, ids.join(','), current])
+  const entry = entries[current]
   const alter = (key: string, value: unknown) => change(next => {
     const all = worldEntries(next)
     next.data.entries = all
-    if (all[selected]) all[selected][key] = value
+    if (all[current]) all[current][key] = value
   })
-  const add = () => change(next => {
-    const all = worldEntries(next)
-    next.data.entries = all
-    const numeric = Object.keys(all).map(Number).filter(Number.isFinite)
+  const add = () => {
+    const numeric = ids.map(Number).filter(Number.isFinite)
     const id = String((numeric.length ? Math.max(...numeric) : -1) + 1)
-    all[id] = { ...ENTRY_DEFAULTS, uid: Number(id) }
-    setSelected(id)
-  })
+    change(next => {
+      const all = worldEntries(next)
+      next.data.entries = all
+      all[id] = { ...ENTRY_DEFAULTS, uid: Number(id) }
+    })
+    pick(id)
+  }
   const remove = () => change(next => {
-    const all = worldEntries(next); next.data.entries = all; delete all[selected]
+    const all = worldEntries(next); next.data.entries = all; delete all[current]
   })
   return <div className="stcw-world-editor">
     <div className="stcw-entry-list">
       <button onClick={add}>＋ 新条目</button>
-      {ids.map(id => <button key={id} className={id === selected ? 'active' : ''} onClick={() => setSelected(id)}>
+      {ids.map(id => <button key={id} className={id === current ? 'active' : ''} onClick={() => pick(id)}>
         <b>{entries[id]?.comment || `条目 ${id}`}</b><small>{Array.isArray(entries[id]?.key) ? entries[id].key.join(', ') : ''}</small>
       </button>)}
     </div>
     <div className="stcw-entry-form">{entry ? <>
-      <div className="stcw-row"><strong>条目 {selected}</strong><button className="danger" onClick={remove}>删除</button></div>
+      <div className="stcw-row"><strong>条目 {current}</strong><button className="danger" onClick={remove}>删除</button></div>
       <TextField label="标题 / 备注" value={field(entry, 'comment')} onChange={value => alter('comment', value)} />
       <TextField label="主关键词（逗号分隔）" value={Array.isArray(entry.key) ? entry.key.join(', ') : ''} onChange={value => alter('key', value.split(',').map(v => v.trim()).filter(Boolean))} />
       <TextField label="次关键词（逗号分隔）" value={Array.isArray(entry.keysecondary) ? entry.keysecondary.join(', ') : ''} onChange={value => alter('keysecondary', value.split(',').map(v => v.trim()).filter(Boolean))} />
-      <TextField label="注入内容" multiline value={field(entry, 'content')} onChange={value => alter('content', value)} />
+      <p className="stcw-hint">「注入内容」已扩展为右侧整栏编辑窗，随条目选择联动。</p>
       <div className="stcw-grid2">
         <TextField label="顺序" value={String(entry.order ?? 100)} onChange={value => alter('order', Number(value) || 0)} />
         <TextField label="深度" value={String(entry.depth ?? 4)} onChange={value => alter('depth', Number(value) || 0)} />
@@ -152,13 +163,13 @@ function WorldbookEditor({ asset, change }: { asset: TavernAsset; change: (mutat
   </div>
 }
 
-function EmbeddedWorldbookEditor({ asset, change }: { asset: TavernAsset; change: (mutate: (asset: TavernAsset) => void) => void }) {
+function EmbeddedWorldbookEditor({ asset, change, selected, onSelect }: { asset: TavernAsset; change: (mutate: (asset: TavernAsset) => void) => void; selected?: string; onSelect?: (id: string) => void }) {
   const data = innerCharacter(asset)
   const book = data.character_book && typeof data.character_book === 'object' && !Array.isArray(data.character_book) ? data.character_book : undefined
   const create = () => change(next => { innerCharacter(next).character_book = { name: `${next.name} 世界书`, description: '', entries: [] } })
   const remove = () => { if (confirm('移除这张角色卡的内嵌世界书？其他附属资源不会受影响。')) change(next => { delete innerCharacter(next).character_book }) }
   if (!book) return <details className="stcw-embedded-book"><summary>内嵌世界书</summary><p className="stcw-hint">这张角色卡目前没有 character_book。</p><button onClick={create}>＋ 新建内嵌世界书</button></details>
-  const bookAsset = { ...asset, kind: 'worldbook' as const, format: 'worldbook' as const, name: typeof book.name === 'string' ? book.name : `${asset.name} 世界书`, data: book }
+  const bookAsset = embeddedBookAsset(asset)!
   const changeBook = (mutate: (asset: TavernAsset) => void) => change(next => {
     const inner = innerCharacter(next)
     const nested = { ...next, kind: 'worldbook' as const, format: 'worldbook' as const, data: inner.character_book }
@@ -169,7 +180,7 @@ function EmbeddedWorldbookEditor({ asset, change }: { asset: TavernAsset; change
     const embedded = innerCharacter(next).character_book
     if (embedded && typeof embedded === 'object' && !Array.isArray(embedded)) embedded.name = value
   })
-  return <details className="stcw-embedded-book"><summary>内嵌世界书 · 可写作与触发预览</summary><div className="stcw-row"><span className="stcw-safe-note">保存在角色卡 character_book 中，导出与原卡同行。</span><button className="danger" onClick={remove}>移除内嵌世界书</button></div><TextField label="世界书标题" value={typeof book.name === 'string' ? book.name : ''} onChange={rename} /><WorldbookEditor asset={bookAsset} change={changeBook} /><div className="stcw-embedded-preview"><Preview asset={bookAsset} /></div></details>
+  return <details className="stcw-embedded-book"><summary>内嵌世界书 · 可写作与触发预览</summary><div className="stcw-row"><span className="stcw-safe-note">保存在角色卡 character_book 中，导出与原卡同行。</span><button className="danger" onClick={remove}>移除内嵌世界书</button></div><TextField label="世界书标题" value={typeof book.name === 'string' ? book.name : ''} onChange={rename} /><WorldbookEditor asset={bookAsset} change={changeBook} selected={selected} onSelect={onSelect} /><div className="stcw-embedded-preview"><Preview asset={bookAsset} /></div></details>
 }
 
 function PresetPlusEditor({ asset, change }: { asset: TavernAsset; change: (mutate: (asset: TavernAsset) => void) => void }) {
@@ -349,6 +360,65 @@ function Preview({ asset }: { asset: TavernAsset }) {
   const group = orders.find(value => value?.character_id === 100001) || orders[0]
   const ordered = Array.isArray(group?.order) ? group.order.filter((value: any) => value?.enabled !== false).map((value: any) => byId.get(String(value.identifier))).filter(Boolean) : prompts
   return <div><h3>提示顺序预览</h3>{ordered.length ? ordered.map((prompt: any, index: number) => <article className="stcw-prompt" key={String(prompt.identifier ?? index)}><div><b>{index + 1}. {prompt.name || prompt.identifier}</b><span>{prompt.role || (prompt.marker ? 'marker' : '')}</span></div><pre>{prompt.marker ? `〔SillyTavern 动态片段：${prompt.identifier}〕` : prompt.content || '（空）'}</pre></article>) : <pre>{field(asset.data, 'story_string') || field(asset.data, 'input_sequence') || JSON.stringify(asset.data, null, 2)}</pre>}</div>
+}
+
+interface LorePaneContext {
+  book: TavernAsset
+  entryId: string
+  entry?: any
+  embedded: boolean
+  select: (id: string) => void
+  change: (mutate: (book: TavernAsset) => void) => void
+}
+
+const WI_ROLE_LABEL: Record<number, string> = { 0: 'system', 1: 'user', 2: 'assistant' }
+
+function stringList(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [] }
+
+function LoreContentEditor({ lore }: { lore: LorePaneContext }) {
+  const entry = lore.entry
+  if (!entry) return <div className="stcw-empty stcw-content-empty">先在世界书里新建一个条目，再在这里撰写注入内容。</div>
+  const alter = (key: string, value: unknown) => lore.change(next => {
+    const all = worldEntries(next)
+    next.data.entries = all
+    if (all[lore.entryId]) all[lore.entryId][key] = value
+  })
+  const content = field(entry, 'content')
+  const keys = stringList(entry.key)
+  const secondary = stringList(entry.keysecondary)
+  const position = Number(entry.position ?? 0)
+  const ids = Object.keys(worldEntries(lore.book)).sort((a, b) => Number(a) - Number(b))
+  return <div className="stcw-content-editor">
+    <div className="stcw-content-head">
+      <select value={lore.entryId} onChange={event => lore.select(event.target.value)} title="切换要编辑的条目">
+        {ids.map(id => <option key={id} value={id}>{worldEntries(lore.book)[id]?.comment || `条目 ${id}`}</option>)}
+      </select>
+      <span>{lore.embedded ? `内嵌世界书 · ${lore.book.name}` : field(lore.book.data, 'name') || lore.book.name}</span>
+    </div>
+    <div className="stcw-content-chips">
+      <span className={entry.constant === true ? 'on' : ''}>{entry.constant === true ? '常驻注入' : '关键词触发'}</span>
+      {entry.disable === true && <span className="off">已禁用</span>}
+      <span>order {Number(entry.order ?? 100)}</span>
+      {position === 4 && <span>@D{Number(entry.depth ?? 4)} · {WI_ROLE_LABEL[Number(entry.role) || 0] || 'system'}</span>}
+      {position !== 0 && position !== 4 && <span>位置 {position}</span>}
+    </div>
+    <div className="stcw-keyword-row"><small>主关键词</small><div>{keys.length ? keys.map((keyword, index) => <span key={keyword + '-' + index}>{keyword}</span>) : <em>未设置（仅常驻生效）</em>}</div></div>
+    {entry.selective !== false && secondary.length > 0 && <div className="stcw-keyword-row"><small>次关键词</small><div>{secondary.map((keyword, index) => <span key={keyword + '-' + index}>{keyword}</span>)}</div></div>}
+    <textarea className="stcw-content-input" value={content} onChange={event => alter('content', event.target.value)} placeholder="撰写该条目实际注入到酒馆提示词中的正文…" />
+    <div className="stcw-content-foot"><span>{content.length} 字符</span><span>{lore.embedded ? '随角色卡 character_book 一起导出' : '保存于世界书条目 content 字段'}</span></div>
+  </div>
+}
+
+function PreviewPane({ asset, lore }: { asset?: TavernAsset; lore?: LorePaneContext }) {
+  const [legacy, setLegacy] = useState(false)
+  useEffect(() => { setLegacy(false) }, [asset?.id])
+  return <aside className="stcw-preview">
+    {lore ? <div className="stcw-preview-tabs">
+      <button className={legacy ? '' : 'active'} onClick={() => setLegacy(false)}>注入内容</button>
+      <button className={legacy ? 'active' : ''} onClick={() => setLegacy(true)}>资源实时预览</button>
+    </div> : <div className="stcw-preview-title">资源实时预览</div>}
+    {lore && !legacy ? <LoreContentEditor lore={lore} /> : <div className="stcw-preview-scroll">{asset ? <Preview asset={asset} /> : null}</div>}
+  </aside>
 }
 
 function embeddedPath(uri: unknown): string | undefined {
@@ -554,6 +624,7 @@ function Workbench(props: any) {
   const [project, setProject] = useState<TavernProject | null>(null)
   const [selectedId, setSelectedId] = useState('')
   const [notice, setNotice] = useState('')
+  const [loreEntryId, setLoreEntryId] = useState('')
   const asset = project?.assets.find(value => value.id === selectedId) || project?.assets[0]
   const loadProjects = async (preferred?: string | null) => {
     const result = await api<{ projects: any[] }>('/projects'); setProjects(result.projects)
@@ -562,9 +633,10 @@ function Workbench(props: any) {
     else setProject(null)
   }
   useEffect(() => {
-    setProject(null); setProjects([]); setSelectedId('')
+    setProject(null); setProjects([]); setSelectedId(''); setLoreEntryId('')
     if (isOpen && workspacePath) void loadProjects().catch(error => setNotice(error.message))
   }, [isOpen, workspacePath])
+  useEffect(() => { setLoreEntryId('') }, [asset?.id])
   if (!isOpen) return null
   if (!workspacePath) return <div className="stcw-layer"><div className="stcw-workbench"><header><b>✦ 酒馆创作模式</b><button className="stcw-close" onClick={() => setOpened(false)}>×</button></header><main className="stcw-welcome"><h2>请先选择工作区</h2><p>项目与导入资源将保存在该工作区的 <code>.tavernres</code> 中。</p></main></div></div>
   const createProject = async () => { const result = await api<{ project: TavernProject }>('/projects', { method: 'POST', body: JSON.stringify({}) }); await loadProjects(result.project.id) }
@@ -584,6 +656,28 @@ function Workbench(props: any) {
     if (!current || !asset) return current
     const next = structuredClone(current); const selected = next.assets.find(value => value.id === asset.id); if (selected) mutate(selected); return next
   })
+  const loreBook = !asset ? undefined : asset.kind === 'worldbook' ? asset : asset.kind === 'character' ? embeddedBookAsset(asset) : undefined
+  const loreEntries = loreBook ? worldEntries(loreBook) : {}
+  const loreIds = Object.keys(loreEntries).sort((a, b) => Number(a) - Number(b))
+  const loreEntryIdCurrent = loreEntries[loreEntryId] ? loreEntryId : (loreIds[0] || '')
+  const changeLoreBook = (mutate: (book: TavernAsset) => void) => {
+    if (!asset) return
+    if (asset.kind === 'worldbook') { changeAsset(mutate); return }
+    changeAsset(next => {
+      const inner = innerCharacter(next)
+      const nested = { ...next, kind: 'worldbook' as const, format: 'worldbook' as const, data: inner.character_book }
+      mutate(nested)
+      inner.character_book = nested.data
+    })
+  }
+  const lore: LorePaneContext | undefined = loreBook ? {
+    book: loreBook,
+    entryId: loreEntryIdCurrent,
+    entry: loreEntries[loreEntryIdCurrent],
+    embedded: asset!.kind === 'character',
+    select: setLoreEntryId,
+    change: changeLoreBook,
+  } : undefined
   const save = async () => { if (!project || !asset) return; const result = await api<{ project: TavernProject }>(`/projects/${project.id}/assets/${asset.id}`, { method: 'PUT', body: JSON.stringify({ asset }) }); acceptProject(result.project); setNotice('已保存') }
   const add = async (kind: AssetKind) => { if (!project) return; const result = await api<{ project: TavernProject }>(`/projects/${project.id}/assets`, { method: 'POST', body: JSON.stringify({ kind }) }); acceptProject(result.project); setSelectedId(result.project.assets.at(-1)?.id || '') }
   const importFiles = async (files: FileList | null) => {
@@ -627,9 +721,9 @@ function Workbench(props: any) {
         <div className="stcw-panel-title">项目资源</div><div className="stcw-assets">{project.assets.length ? project.assets.map(item => <button key={item.id} className={item.id === asset?.id ? 'active' : ''} onClick={() => setSelectedId(item.id)}><span>{item.kind === 'character' ? '角色' : item.kind === 'worldbook' ? '世界' : '预设'}</span><b>{item.name}</b><small>{item.format}{item.kind === 'character' && innerCharacter(item).character_book ? ' · 内嵌世界书' : ''}{item.resources?.length ? ` · ${item.resources.length} 文件` : ''}</small></button>) : <div className="stcw-empty">这是一个空项目。用上方按钮新建或批量导入。</div>}</div>
         {asset?.kind === 'character' && <MigrationTool project={project} target={asset} accept={acceptProject} notice={setNotice} />}</aside>
         <section className="stcw-resource-pane"><div className="stcw-resource-grid"><section className="stcw-editor">{asset ? <><div className="stcw-editor-head"><div><input value={asset.name} onChange={e => changeAsset(next => { next.name = e.target.value })} /><small>{asset.format}</small></div><div><button onClick={() => void save()}>保存</button>{asset.kind === 'character' && <><a className="stcw-button" href={downloadUrl(`/projects/${project.id}/assets/${asset.id}/export?format=png`)}>PNG</a><a className="stcw-button" href={downloadUrl(`/projects/${project.id}/assets/${asset.id}/export?format=v3`)}>V3 JSON</a><a className="stcw-button" href={downloadUrl(`/projects/${project.id}/assets/${asset.id}/export?format=charx`)}>CHARX</a></>} {asset.kind !== 'character' && <a className="stcw-button" href={downloadUrl(`/projects/${project.id}/assets/${asset.id}/export?format=json`)}>导出 JSON</a>}<button className="danger" onClick={() => void deleteAsset()}>删除</button></div></div>
-          <ResourceInspector asset={asset} />{asset.kind === 'character' ? <><CharacterEditor asset={asset} change={changeAsset} /><EmbeddedWorldbookEditor asset={asset} change={changeAsset} /></> : asset.kind === 'worldbook' ? <WorldbookEditor asset={asset} change={changeAsset} /> : <PresetEditor asset={asset} change={changeAsset} />}
+          <ResourceInspector asset={asset} />{asset.kind === 'character' ? <><CharacterEditor asset={asset} change={changeAsset} /><EmbeddedWorldbookEditor asset={asset} change={changeAsset} selected={loreEntryIdCurrent} onSelect={setLoreEntryId} /></> : asset.kind === 'worldbook' ? <WorldbookEditor asset={asset} change={changeAsset} selected={loreEntryIdCurrent} onSelect={setLoreEntryId} /> : <PresetEditor asset={asset} change={changeAsset} />}
           <RawEditor asset={asset} apply={data => changeAsset(next => { next.data = data })} /></> : <div className="stcw-empty">请选择或新建一个资源</div>}</section>
-          <aside className="stcw-preview"><div className="stcw-preview-title">资源实时预览</div>{asset ? <Preview asset={asset} /> : null}</aside></div></section></main>
+          <PreviewPane asset={asset} lore={lore} /></div></section></main>
     </>}
   </div></div>
 }
@@ -640,7 +734,7 @@ const CSS = `
 
 const EXTRA_CSS = `
 .stcw-composer-button{border:0;background:transparent;color:inherit;padding:4px 7px;border-radius:6px;cursor:pointer}.stcw-composer-button:hover{background:color-mix(in srgb,currentColor 10%,transparent)}
-.stcw-studio{display:grid;grid-template-columns:330px minmax(0,1fr);min-height:0;flex:1}.stcw-ai-pane{min-height:0;overflow:auto;padding:12px;border-right:1px solid #302a3a;background:#121019}.stcw-resource-pane{min-width:0;min-height:0}.stcw-resource-grid{height:100%;display:grid;grid-template-columns:minmax(480px,1fr) minmax(300px,36%);min-height:0}.stcw-panel-title{text-transform:uppercase;letter-spacing:.12em;font-size:11px;color:#aa95ba;margin:3px 0 9px}.stcw-harness{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-harness textarea{width:100%;resize:vertical}.stcw-harness-actions{display:flex;gap:7px;margin-top:8px}.stcw-harness-actions button{flex:1}.stcw-workbench button.primary{background:#694697;border-color:#9367c8}.stcw-workbench button:disabled{opacity:.45;cursor:not-allowed}.stcw-ai-pane>.stcw-assets{border:0;padding:0;max-height:35vh;overflow:auto}.stcw-migrate{margin-top:12px;border-top:1px solid #302a3a;padding-top:10px}.stcw-migrate summary,.stcw-resources summary{cursor:pointer;color:#ccb5e6;font-weight:700;margin-bottom:9px}.stcw-migrate-list{max-height:190px;overflow:auto;margin:8px 0}.stcw-migrate-list label{display:flex;gap:7px;padding:6px;border-radius:6px}.stcw-migrate-list label:hover{background:#211b29}.stcw-migrate-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-migrate-list small{color:#9e90aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-safe-note{color:#aee6c1;background:#153421;padding:7px;border-radius:6px;font-size:12px}.stcw-resources{border:1px solid #3d3548;border-radius:8px;padding:9px;margin-bottom:12px}.stcw-resource-badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px}.stcw-resource-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-resource-badges span.ok{background:#16422a;color:#aee6c1}.stcw-resource-row{display:grid;grid-template-columns:minmax(100px,1fr) auto;gap:2px 8px;padding:6px;border-top:1px solid #2e2736}.stcw-resource-row code{grid-column:1/3;color:#9f90ae;word-break:break-all}.stcw-resource-row em{grid-column:1/3;color:#ffafba}.stcw-workbench header small{color:#998ca5;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-connector{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-connector summary{cursor:pointer;color:#ccb5e6;font-weight:700}.stcw-connector input:not([type=checkbox]){width:100%}.stcw-connector .stcw-row{margin:8px 0;gap:6px}.stcw-connector .stcw-row input{flex:1}.stcw-connector .stcw-row select{flex:0 0 auto}.stcw-connector button{margin-top:4px}.stcw-connector button.danger{margin-top:10px}.stcw-probe-result{margin-top:9px;display:flex;flex-direction:column;gap:7px}.stcw-probe-error{color:#ffafba;background:#3a1b22;padding:7px;border-radius:6px;font-size:12px}.stcw-cat-badges{display:flex;gap:5px;flex-wrap:wrap;margin:4px 0}.stcw-cat-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-cat-badges span.ok{background:#16422a;color:#aee6c1}.stcw-remote-group{margin-top:8px;border-top:1px solid #302a3a;padding-top:7px}.stcw-remote-group summary{font-weight:600;color:#c9b6de;cursor:pointer}.stcw-remote-all{display:flex;gap:7px;align-items:center;margin:5px 0}.stcw-remote-list{max-height:190px;overflow:auto;margin:4px 0}.stcw-remote-list label{display:flex;gap:7px;align-items:center;padding:4px 5px;border-radius:6px}.stcw-remote-list label:hover{background:#211b29}.stcw-remote-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-remote-list label b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-remote-list small{color:#9e90aa}.stcw-dshprompt{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-dshprompt .stcw-field{margin:9px 0}.stcw-dshprompt textarea{width:100%;resize:vertical}.stcw-dshprompt .stcw-row{margin-top:9px}.stcw-dshprompt .stcw-row .stcw-hint{flex:1}@media(max-width:1150px){.stcw-studio{grid-template-columns:285px minmax(0,1fr)}.stcw-resource-grid{grid-template-columns:minmax(420px,1fr) 300px}}`
+.stcw-studio{display:grid;grid-template-columns:330px minmax(0,1fr);min-height:0;flex:1}.stcw-ai-pane{min-height:0;overflow:auto;padding:12px;border-right:1px solid #302a3a;background:#121019}.stcw-resource-pane{min-width:0;min-height:0}.stcw-resource-grid{height:100%;display:grid;grid-template-columns:minmax(420px,1fr) minmax(320px,40%);min-height:0}.stcw-panel-title{text-transform:uppercase;letter-spacing:.12em;font-size:11px;color:#aa95ba;margin:3px 0 9px}.stcw-harness{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-harness textarea{width:100%;resize:vertical}.stcw-harness-actions{display:flex;gap:7px;margin-top:8px}.stcw-harness-actions button{flex:1}.stcw-workbench button.primary{background:#694697;border-color:#9367c8}.stcw-workbench button:disabled{opacity:.45;cursor:not-allowed}.stcw-ai-pane>.stcw-assets{border:0;padding:0;max-height:35vh;overflow:auto}.stcw-migrate{margin-top:12px;border-top:1px solid #302a3a;padding-top:10px}.stcw-migrate summary,.stcw-resources summary{cursor:pointer;color:#ccb5e6;font-weight:700;margin-bottom:9px}.stcw-migrate-list{max-height:190px;overflow:auto;margin:8px 0}.stcw-migrate-list label{display:flex;gap:7px;padding:6px;border-radius:6px}.stcw-migrate-list label:hover{background:#211b29}.stcw-migrate-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-migrate-list small{color:#9e90aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-safe-note{color:#aee6c1;background:#153421;padding:7px;border-radius:6px;font-size:12px}.stcw-resources{border:1px solid #3d3548;border-radius:8px;padding:9px;margin-bottom:12px}.stcw-resource-badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px}.stcw-resource-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-resource-badges span.ok{background:#16422a;color:#aee6c1}.stcw-resource-row{display:grid;grid-template-columns:minmax(100px,1fr) auto;gap:2px 8px;padding:6px;border-top:1px solid #2e2736}.stcw-resource-row code{grid-column:1/3;color:#9f90ae;word-break:break-all}.stcw-resource-row em{grid-column:1/3;color:#ffafba}.stcw-workbench header small{color:#998ca5;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-connector{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-connector summary{cursor:pointer;color:#ccb5e6;font-weight:700}.stcw-connector input:not([type=checkbox]){width:100%}.stcw-connector .stcw-row{margin:8px 0;gap:6px}.stcw-connector .stcw-row input{flex:1}.stcw-connector .stcw-row select{flex:0 0 auto}.stcw-connector button{margin-top:4px}.stcw-connector button.danger{margin-top:10px}.stcw-probe-result{margin-top:9px;display:flex;flex-direction:column;gap:7px}.stcw-probe-error{color:#ffafba;background:#3a1b22;padding:7px;border-radius:6px;font-size:12px}.stcw-cat-badges{display:flex;gap:5px;flex-wrap:wrap;margin:4px 0}.stcw-cat-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-cat-badges span.ok{background:#16422a;color:#aee6c1}.stcw-remote-group{margin-top:8px;border-top:1px solid #302a3a;padding-top:7px}.stcw-remote-group summary{font-weight:600;color:#c9b6de;cursor:pointer}.stcw-remote-all{display:flex;gap:7px;align-items:center;margin:5px 0}.stcw-remote-list{max-height:190px;overflow:auto;margin:4px 0}.stcw-remote-list label{display:flex;gap:7px;align-items:center;padding:4px 5px;border-radius:6px}.stcw-remote-list label:hover{background:#211b29}.stcw-remote-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-remote-list label b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-remote-list small{color:#9e90aa}.stcw-dshprompt{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-dshprompt .stcw-field{margin:9px 0}.stcw-dshprompt textarea{width:100%;resize:vertical}.stcw-dshprompt .stcw-row{margin-top:9px}.stcw-dshprompt .stcw-row .stcw-hint{flex:1}.stcw-preview{display:flex;flex-direction:column;overflow:hidden}.stcw-preview-tabs{display:flex;gap:6px;margin-bottom:12px}.stcw-preview-tabs button{flex:1;padding:6px 8px;font-size:12px;border-radius:7px;line-height:1.3}.stcw-preview-tabs button.active{border-color:#9b75ce;background:#392c4a}.stcw-preview-scroll{flex:1;min-height:0;overflow:auto}.stcw-content-editor{flex:1;min-height:0;display:flex;flex-direction:column;gap:9px;overflow:auto}.stcw-content-head{display:flex;justify-content:space-between;align-items:center;gap:8px}.stcw-content-head select{max-width:60%}.stcw-content-head span{color:#a795b7;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 0 auto}.stcw-content-chips{display:flex;gap:5px;flex-wrap:wrap}.stcw-content-chips span{border:1px solid #4a4056;border-radius:12px;padding:2px 7px;font-size:11px;color:#c5b8d4}.stcw-content-chips span.on{border-color:#3f8b61;background:#1e5034;color:#c5f4d5}.stcw-content-chips span.off{border-color:#7a3f4b;color:#ffabb8}.stcw-content-editor .stcw-keyword-row{margin-top:0}.stcw-content-input{flex:1;min-height:180px;width:100%;resize:none;font-size:14px;line-height:1.6}.stcw-content-foot{display:flex;justify-content:space-between;gap:8px;color:#8d8299;font-size:11px}.stcw-content-empty{flex:1}@media(max-width:1150px){.stcw-studio{grid-template-columns:285px minmax(0,1fr)}.stcw-resource-grid{grid-template-columns:minmax(380px,1fr) minmax(300px,330px)}}`
 
 const EMBEDDED_CSS = `.stcw-embedded-book{margin-top:18px;border:1px solid #493b57;border-radius:9px;padding:10px}.stcw-embedded-book>summary{cursor:pointer;color:#d1b6ea;font-weight:700}.stcw-embedded-book>.stcw-field{margin:12px 0}.stcw-embedded-book>.stcw-world-editor{margin-top:12px}.stcw-embedded-preview{margin-top:14px;border-top:1px solid #342d3e;padding-top:10px}.stcw-lore-hit.inactive{opacity:.62}.stcw-lore-hit.active{border-color:#397452;background:#14251c}.stcw-lore-head{display:flex;justify-content:space-between;gap:8px}.stcw-lore-head span{color:#b6a6c4;font-size:11px}.stcw-keyword-row{margin-top:8px}.stcw-keyword-row>small{display:block;color:#a795b7;margin-bottom:4px}.stcw-keyword-row>div{display:flex;gap:4px;flex-wrap:wrap}.stcw-keyword-row span{border:1px solid #4a4056;border-radius:12px;padding:2px 6px;font-size:11px}.stcw-keyword-row span.matched{border-color:#3f8b61;background:#1e5034;color:#c5f4d5}.stcw-keyword-row em{color:#786e81;font-size:11px}`
 
