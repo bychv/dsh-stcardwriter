@@ -5,9 +5,9 @@
 
 在 DeepSeek Harness 中创作、整理、预览和迁移 SillyTavern 角色卡、世界书与预设。当前插件版本：`0.5.2-alpha.2`；npm 包名：`dsh-stcardwriter`，目前尚未发布到 npm。
 
-面向 DeepSeek Harness `0.1.1-rc.2`，提供“酒馆创作模式”Agent 预设和三栏工作台：左侧连接 Harness 并管理项目，中间编辑资源，右侧整栏编辑世界书注入内容并可切换实时预览。内置本地 SillyTavern 连接器；提示词与伪装消息注入由直接依赖的 [DSH Preset Plus](https://github.com/Rain-kl/dsh-preset-plus) 统一提供。
+面向 DeepSeek Harness `0.1.2-alpha.3`，提供“酒馆创作模式”Agent 预设和三栏工作台：左侧连接 Harness 并管理项目，中间编辑资源，右侧整栏编辑世界书注入内容并可切换实时预览。内置本地 SillyTavern 连接器；提示词与伪装消息注入由直接依赖的 [DSH Preset Plus](https://github.com/Rain-kl/dsh-preset-plus) 统一提供。
 
-当前本机运行验证基线仍是 DSH `0.1.1-rc.2`；另已在**不安装新版 DSH**的前提下，针对官方 `dsh-v0.1.2-alpha.3` 源码完成兼容检查。插件不再直接声明 0.1.2 已删除的 `@deepseek-ai/dsh-client-runtime`，UI 使用新版仍保留的三个插槽；托管 Agent 组合 v4 同时覆盖 0.1.1 与 0.1.2 的标准工具行。可用 `npm run check:dsh-compat -- <DSH 源码目录>` 复查。
+当前本机运行验证基线为 DSH `0.1.2-alpha.3`，插件已通过 `dsh plugin --profile web add` 安装到本机 DSH 并通过供应链锁校验；兼容检查同样针对官方 `dsh-v0.1.2-alpha.3` 源码完成。插件不再直接声明 0.1.2 已删除的 `@deepseek-ai/dsh-client-runtime`，UI 使用新版仍保留的三个插槽；托管 Agent 组合 v4 同时覆盖 0.1.1 与 0.1.2 的标准工具行。可用 `npm run check:dsh-compat -- <DSH 源码目录>` 复查。
 
 ## 快速安装
 
@@ -39,7 +39,7 @@ dsh --profile web
 - Agent 可用 `tavern_character_patch` 修改指定角色字段而不重传整卡；随卡世界书和独立世界书均支持分页、单条读取、增改、删除。
 - `tavern_worldbook_entries_copy` 可在两张角色卡的内嵌世界书之间，或角色卡与独立世界书之间复制选定条目；ID 冲突可安全重编号、覆盖或跳过。
 - `tavern_preset_convert_to_preset_plus` 只负责把 Chat Completion、System Prompt 或 Context 酒馆预设转换成项目内的 `preset-plus-preset` 草稿；可在中栏修改条目，并在右栏预览实际注入顺序。确认后再用 `tavern_preset_plus_write` 独立写入 Preset Plus，支持冲突改名/覆盖和写入后激活。动态 marker 会跳过并报告，不会伪造成静态提示词。
-- 酒馆创作预设包含 DSH `0.1.1-rc.2` 标准模式的文件、搜索、Shell、后台任务、技能、目标、计划、压缩、子 Agent、工作流、提问、Todo 与 Web 工具，并在其上追加 `tavern_*` 工具。
+- 酒馆创作预设包含 DSH `0.1.2-alpha.3` 标准模式的文件、搜索、Shell、后台任务、技能、目标、计划、压缩、子 Agent、工作流、提问、Todo 与 Web 工具，并在其上追加 `tavern_*` 工具。
 - 导出角色卡 PNG、V3 JSON、V2 JSON、V1 JSON 或 CHARX；保留导入 PNG 的原图并重写元数据。
 - 酒馆连接器：填入本机酒馆安装根目录或用户数据目录，即可在工作台里浏览并勾选导入酒馆侧角色卡、世界书和五类预设；单张资源或整个项目可一键写回酒馆对应目录。
 - Agent 可用 `tavern_connect_*` / `tavern_remote_*` 工具完成同样的连接、列举、导入与导出。
@@ -90,7 +90,7 @@ dsh plugin --profile web add .
 - 预设的创建、导入、导出、启用和激活统一在 DSH 设置页的「预设增强」中管理；本插件不再注册第二套 system prompt section，因此不存在双注入或两个 `complete` 段冲突。
 - 不要在同一个 profile 中再次单独安装 `@rain-kl/dsh-preset-plus`；它已经由本插件作为直接依赖加载。
 
-Preset Plus 0.1.5 的客户端清单仍带有旧 `dsh-client-runtime` 包边，但其浏览器插件实际只注入 `slots` 服务并通过 `slots.inject("settings.section", ...)` 注册界面；在 DSH 0.1.2 中包边只用于信息展示，不决定激活顺序，因此该旧清单项不会阻塞加载。兼容检查脚本会同时验证这一点。
+Preset Plus 0.1.5 的客户端清单仍带有旧 `dsh-client-runtime` 包边，但其浏览器插件实际只注入 `slots` 服务并通过 `slots.inject("settings.section", ...)` 注册界面；在 DSH `0.1.2-alpha.3` 中包边只用于信息展示，不决定激活顺序，因此该旧清单项不会阻塞加载。兼容检查脚本会同时验证这一点。
 
 从旧版升级时，插件只会将内容与曾发布版本**精确一致**的 managed v2/v3 组合迁移为 v4；迁移补齐目标命令、子 Agent 模型选择设置和 Web fetch。只要旧预设有任何用户修改，插件就不会覆盖。
 
