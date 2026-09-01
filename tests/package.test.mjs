@@ -13,7 +13,11 @@ test('bundle and client manifests target the DSH plugin loaders', async () => {
   assert.equal(pkg.exports['./client'], './dist/client.js')
   assert.equal(pkg.exports['./package.json'], './package.json')
   assert.equal(pkg.name, 'dsh-stcardwriter')
+  assert.equal(pkg.version, '0.5.1-rc.2')
   assert.equal(pkg.dependencies['@rain-kl/dsh-preset-plus'], '0.1.5')
+  const readme = await readFile('README.md', 'utf8')
+  assert.ok(readme.includes(`当前插件版本：\`${pkg.version}\``))
+  assert.ok(readme.includes(`dsh-stcardwriter-${pkg.version}.tgz`))
   const patch = await readFile('cordis.patch.yml', 'utf8')
   assert.match(patch, /name: '@rain-kl\/dsh-preset-plus'/)
   assert.match(patch, /scopedPresets: \["preset-plus", "tavern-authoring"\]/)
@@ -37,6 +41,10 @@ test('bundle and client manifests target the DSH plugin loaders', async () => {
   assert.match(clientSource, /Preset Plus 预设注入/)
   assert.match(clientSource, /Preset Plus 注入预览/)
   assert.match(clientSource, /preset-plus-preset/)
+  assert.match(clientSource, /世界书标题/)
+  assert.match(clientSource, /绿色关键词已命中/)
+  assert.match(clientSource, /次关键词条件未满足/)
+  assert.match(clientSource, /stcw-keyword-row/)
   assert.doesNotMatch(clientSource, /DshSystemPromptPanel|\/system-prompt/)
   let registration
   Function('window', client)({ __ModuleLoader__: { load(value) { registration = value } } })
@@ -44,6 +52,23 @@ test('bundle and client manifests target the DSH plugin loaders', async () => {
   const clientExports = registration.factory(createRequire(import.meta.url))
   assert.equal(typeof clientExports.apply, 'function')
   assert.deepEqual(clientExports.inject, ['slots'])
+  assert.equal(clientExports.includesKeyword('The Castle gate', 'castle', false, true), true)
+  assert.equal(clientExports.includesKeyword('A scatter plot', 'cat', false, true), false)
+  const inspected = clientExports.inspectLoreEntries({
+    id: 'book', kind: 'worldbook', format: 'worldbook', name: '测试世界书',
+    data: { entries: {
+      0: { comment: '夜城', key: ['城堡'], keysecondary: ['夜晚'], selective: true, selectiveLogic: 0, order: 20 },
+      1: { comment: '非白日', key: ['城堡'], keysecondary: ['白天'], selective: true, selectiveLogic: 2, order: 10 },
+      2: { comment: '禁用常驻', constant: true, disable: true, order: 30 },
+    } },
+  }, '夜晚抵达城堡')
+  assert.deepEqual(inspected.map(item => [item.entry.comment, item.active, item.state]), [
+    ['非白日', true, '已触发'],
+    ['夜城', true, '已触发'],
+    ['禁用常驻', false, '已禁用'],
+  ])
+  assert.deepEqual(inspected[1].primary, [{ keyword: '城堡', matched: true }])
+  assert.deepEqual(inspected[1].secondary, [{ keyword: '夜晚', matched: true }])
 })
 
 test('Tavern authoring Agent preset is bundled', async () => {

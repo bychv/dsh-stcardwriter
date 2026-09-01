@@ -22,7 +22,9 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var client_exports = {};
 __export(client_exports, {
   apply: () => apply,
-  inject: () => inject
+  includesKeyword: () => includesKeyword,
+  inject: () => inject,
+  inspectLoreEntries: () => inspectLoreEntries
 });
 module.exports = __toCommonJS(client_exports);
 var import_react = require("react");
@@ -248,12 +250,17 @@ function EmbeddedWorldbookEditor({ asset, change }) {
     mutate(nested);
     inner.character_book = nested.data;
   });
+  const rename = (value) => change((next) => {
+    const embedded = innerCharacter(next).character_book;
+    if (embedded && typeof embedded === "object" && !Array.isArray(embedded)) embedded.name = value;
+  });
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", { className: "stcw-embedded-book", children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "\u5185\u5D4C\u4E16\u754C\u4E66 \xB7 \u53EF\u5199\u4F5C\u4E0E\u89E6\u53D1\u9884\u89C8" }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-row", children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "stcw-safe-note", children: "\u4FDD\u5B58\u5728\u89D2\u8272\u5361 character_book \u4E2D\uFF0C\u5BFC\u51FA\u4E0E\u539F\u5361\u540C\u884C\u3002" }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "danger", onClick: remove, children: "\u79FB\u9664\u5185\u5D4C\u4E16\u754C\u4E66" })
     ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { label: "\u4E16\u754C\u4E66\u6807\u9898", value: typeof book.name === "string" ? book.name : "", onChange: rename }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorldbookEditor, { asset: bookAsset, change: changeBook }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "stcw-embedded-preview", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Preview, { asset: bookAsset }) })
   ] });
@@ -428,28 +435,34 @@ function includesKeyword(text, keyword, sensitive, whole) {
   if (!whole) return haystack.includes(needle);
   return new RegExp(`(^|[^\\p{L}\\p{N}_])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\\p{L}\\p{N}_]|$)`, sensitive ? "u" : "iu").test(text);
 }
-function activeLoreEntries(asset, scan) {
-  const entries = Object.values(worldEntries(asset));
-  return entries.filter((entry) => {
-    if (entry.disable === true) return false;
-    if (entry.constant === true) return true;
-    const primary = Array.isArray(entry.key) ? entry.key : [];
-    const secondary = Array.isArray(entry.keysecondary) ? entry.keysecondary : [];
+function inspectLoreEntries(asset, scan) {
+  return Object.entries(worldEntries(asset)).map(([id, entry]) => {
+    const primary = Array.isArray(entry.key) ? entry.key.filter((key) => typeof key === "string") : [];
+    const secondary = Array.isArray(entry.keysecondary) ? entry.keysecondary.filter((key) => typeof key === "string") : [];
     const match = (key) => typeof key === "string" && includesKeyword(scan, key, entry.caseSensitive === true, entry.matchWholeWords === true);
-    if (!primary.some(match)) return false;
-    if (entry.selective === false || secondary.length === 0) return true;
-    const matches = secondary.map(match);
-    switch (Number(entry.selectiveLogic ?? 0)) {
-      case 1:
-        return !matches.every(Boolean);
-      case 2:
-        return !matches.some(Boolean);
-      case 3:
-        return matches.every(Boolean);
-      default:
-        return matches.some(Boolean);
+    const primaryMatches = primary.map((keyword) => ({ keyword, matched: match(keyword) }));
+    const secondaryMatches = secondary.map((keyword) => ({ keyword, matched: match(keyword) }));
+    const secondaryLogic = Number(entry.selectiveLogic ?? 0);
+    let active = false;
+    let state = "\u4E3B\u5173\u952E\u8BCD\u672A\u547D\u4E2D";
+    if (entry.disable === true) state = "\u5DF2\u7981\u7528";
+    else if (entry.constant === true) {
+      active = true;
+      state = "\u5E38\u9A7B";
+    } else if (primaryMatches.some((item) => item.matched)) {
+      const matches = secondaryMatches.map((item) => item.matched);
+      active = entry.selective === false || matches.length === 0 ? true : secondaryLogic === 1 ? !matches.every(Boolean) : secondaryLogic === 2 ? !matches.some(Boolean) : secondaryLogic === 3 ? matches.every(Boolean) : matches.some(Boolean);
+      state = active ? "\u5DF2\u89E6\u53D1" : "\u6B21\u5173\u952E\u8BCD\u6761\u4EF6\u672A\u6EE1\u8DB3";
     }
-  }).sort((a, b) => Number(a.order ?? 100) - Number(b.order ?? 100));
+    return { id, entry, active, state, primary: primaryMatches, secondary: secondaryMatches, secondaryLogic };
+  }).sort((a, b) => Number(a.entry.order ?? 100) - Number(b.entry.order ?? 100));
+}
+var SECONDARY_LOGIC_LABEL = { 0: "\u4EFB\u4E00\u547D\u4E2D", 1: "\u4E0D\u53EF\u5168\u90E8\u547D\u4E2D", 2: "\u5747\u4E0D\u53EF\u547D\u4E2D", 3: "\u5FC5\u987B\u5168\u90E8\u547D\u4E2D" };
+function KeywordMatches({ label, values }) {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-keyword-row", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: label }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: values.length ? values.map((item, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: item.matched ? "matched" : "", children: item.keyword }, item.keyword + "-" + index)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "\u672A\u8BBE\u7F6E" }) })
+  ] });
 }
 function Preview({ asset }) {
   const [scan, setScan] = (0, import_react.useState)("");
@@ -468,20 +481,30 @@ function Preview({ asset }) {
     ] });
   }
   if (asset.kind === "worldbook") {
-    const active = activeLoreEntries(asset, scan);
+    const inspected = inspectLoreEntries(asset, scan);
+    const active = inspected.filter((item) => item.active);
     return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: "\u4E16\u754C\u4E66\u6FC0\u6D3B\u9884\u89C8" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [
+        field(asset.data, "name") || asset.name || "\u4E16\u754C\u4E66",
+        " \xB7 \u89E6\u53D1\u9884\u89C8"
+      ] }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { label: "\u6A21\u62DF\u804A\u5929\u6587\u672C", multiline: true, value: scan, onChange: setScan }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-preview-note", children: [
         "\u547D\u4E2D ",
         active.length,
-        " \u4E2A\u6761\u76EE\uFF08\u9884\u89C8\u5173\u952E\u8BCD\u4E0E\u903B\u8F91\uFF1B\u6982\u7387/\u9012\u5F52\u7531 SillyTavern \u6700\u7EC8\u6267\u884C\uFF09"
+        "/",
+        inspected.length,
+        " \u4E2A\u6761\u76EE\uFF08\u7EFF\u8272\u5173\u952E\u8BCD\u5DF2\u547D\u4E2D\uFF1B\u6982\u7387/\u9012\u5F52\u7531 SillyTavern \u6700\u7EC8\u6267\u884C\uFF09"
       ] }),
-      active.map((entry, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", { className: "stcw-lore-hit", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: entry.comment || `\u6761\u76EE ${index + 1}` }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: Array.isArray(entry.key) ? entry.key.join(", ") : "" }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: entry.content })
-      ] }, index))
+      inspected.length ? inspected.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", { className: "stcw-lore-hit " + (item.active ? "active" : "inactive"), children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-lore-head", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: item.entry.comment || "\u6761\u76EE " + item.id }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: item.state })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KeywordMatches, { label: "\u4E3B\u5173\u952E\u8BCD", values: item.primary }),
+        item.entry.selective !== false && item.secondary.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(KeywordMatches, { label: "\u6B21\u5173\u952E\u8BCD \xB7 " + (SECONDARY_LOGIC_LABEL[item.secondaryLogic] || "\u903B\u8F91 " + item.secondaryLogic), values: item.secondary }),
+        item.active && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: item.entry.content })
+      ] }, item.id)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: "\u5C1A\u65E0\u4E16\u754C\u4E66\u6761\u76EE" })
     ] });
   }
   if (asset.format === "preset-plus-preset") {
@@ -1066,7 +1089,7 @@ var CSS = `
 var EXTRA_CSS = `
 .stcw-composer-button{border:0;background:transparent;color:inherit;padding:4px 7px;border-radius:6px;cursor:pointer}.stcw-composer-button:hover{background:color-mix(in srgb,currentColor 10%,transparent)}
 .stcw-studio{display:grid;grid-template-columns:330px minmax(0,1fr);min-height:0;flex:1}.stcw-ai-pane{min-height:0;overflow:auto;padding:12px;border-right:1px solid #302a3a;background:#121019}.stcw-resource-pane{min-width:0;min-height:0}.stcw-resource-grid{height:100%;display:grid;grid-template-columns:minmax(480px,1fr) minmax(300px,36%);min-height:0}.stcw-panel-title{text-transform:uppercase;letter-spacing:.12em;font-size:11px;color:#aa95ba;margin:3px 0 9px}.stcw-harness{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-harness textarea{width:100%;resize:vertical}.stcw-harness-actions{display:flex;gap:7px;margin-top:8px}.stcw-harness-actions button{flex:1}.stcw-workbench button.primary{background:#694697;border-color:#9367c8}.stcw-workbench button:disabled{opacity:.45;cursor:not-allowed}.stcw-ai-pane>.stcw-assets{border:0;padding:0;max-height:35vh;overflow:auto}.stcw-migrate{margin-top:12px;border-top:1px solid #302a3a;padding-top:10px}.stcw-migrate summary,.stcw-resources summary{cursor:pointer;color:#ccb5e6;font-weight:700;margin-bottom:9px}.stcw-migrate-list{max-height:190px;overflow:auto;margin:8px 0}.stcw-migrate-list label{display:flex;gap:7px;padding:6px;border-radius:6px}.stcw-migrate-list label:hover{background:#211b29}.stcw-migrate-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-migrate-list small{color:#9e90aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-safe-note{color:#aee6c1;background:#153421;padding:7px;border-radius:6px;font-size:12px}.stcw-resources{border:1px solid #3d3548;border-radius:8px;padding:9px;margin-bottom:12px}.stcw-resource-badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px}.stcw-resource-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-resource-badges span.ok{background:#16422a;color:#aee6c1}.stcw-resource-row{display:grid;grid-template-columns:minmax(100px,1fr) auto;gap:2px 8px;padding:6px;border-top:1px solid #2e2736}.stcw-resource-row code{grid-column:1/3;color:#9f90ae;word-break:break-all}.stcw-resource-row em{grid-column:1/3;color:#ffafba}.stcw-workbench header small{color:#998ca5;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-connector{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-connector summary{cursor:pointer;color:#ccb5e6;font-weight:700}.stcw-connector input:not([type=checkbox]){width:100%}.stcw-connector .stcw-row{margin:8px 0;gap:6px}.stcw-connector .stcw-row input{flex:1}.stcw-connector .stcw-row select{flex:0 0 auto}.stcw-connector button{margin-top:4px}.stcw-connector button.danger{margin-top:10px}.stcw-probe-result{margin-top:9px;display:flex;flex-direction:column;gap:7px}.stcw-probe-error{color:#ffafba;background:#3a1b22;padding:7px;border-radius:6px;font-size:12px}.stcw-cat-badges{display:flex;gap:5px;flex-wrap:wrap;margin:4px 0}.stcw-cat-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-cat-badges span.ok{background:#16422a;color:#aee6c1}.stcw-remote-group{margin-top:8px;border-top:1px solid #302a3a;padding-top:7px}.stcw-remote-group summary{font-weight:600;color:#c9b6de;cursor:pointer}.stcw-remote-all{display:flex;gap:7px;align-items:center;margin:5px 0}.stcw-remote-list{max-height:190px;overflow:auto;margin:4px 0}.stcw-remote-list label{display:flex;gap:7px;align-items:center;padding:4px 5px;border-radius:6px}.stcw-remote-list label:hover{background:#211b29}.stcw-remote-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-remote-list label b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-remote-list small{color:#9e90aa}.stcw-dshprompt{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-dshprompt .stcw-field{margin:9px 0}.stcw-dshprompt textarea{width:100%;resize:vertical}.stcw-dshprompt .stcw-row{margin-top:9px}.stcw-dshprompt .stcw-row .stcw-hint{flex:1}@media(max-width:1150px){.stcw-studio{grid-template-columns:285px minmax(0,1fr)}.stcw-resource-grid{grid-template-columns:minmax(420px,1fr) 300px}}`;
-var EMBEDDED_CSS = `.stcw-embedded-book{margin-top:18px;border:1px solid #493b57;border-radius:9px;padding:10px}.stcw-embedded-book>summary{cursor:pointer;color:#d1b6ea;font-weight:700}.stcw-embedded-book>.stcw-world-editor{margin-top:12px}.stcw-embedded-preview{margin-top:14px;border-top:1px solid #342d3e;padding-top:10px}`;
+var EMBEDDED_CSS = `.stcw-embedded-book{margin-top:18px;border:1px solid #493b57;border-radius:9px;padding:10px}.stcw-embedded-book>summary{cursor:pointer;color:#d1b6ea;font-weight:700}.stcw-embedded-book>.stcw-field{margin:12px 0}.stcw-embedded-book>.stcw-world-editor{margin-top:12px}.stcw-embedded-preview{margin-top:14px;border-top:1px solid #342d3e;padding-top:10px}.stcw-lore-hit.inactive{opacity:.62}.stcw-lore-hit.active{border-color:#397452;background:#14251c}.stcw-lore-head{display:flex;justify-content:space-between;gap:8px}.stcw-lore-head span{color:#b6a6c4;font-size:11px}.stcw-keyword-row{margin-top:8px}.stcw-keyword-row>small{display:block;color:#a795b7;margin-bottom:4px}.stcw-keyword-row>div{display:flex;gap:4px;flex-wrap:wrap}.stcw-keyword-row span{border:1px solid #4a4056;border-radius:12px;padding:2px 6px;font-size:11px}.stcw-keyword-row span.matched{border-color:#3f8b61;background:#1e5034;color:#c5f4d5}.stcw-keyword-row em{color:#786e81;font-size:11px}`;
 function installStyle() {
   const style = document.createElement("style");
   style.dataset.dshStcardwriter = "true";

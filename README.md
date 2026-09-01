@@ -3,7 +3,7 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-4b8f77.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-runtime-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 
-在 DeepSeek Harness 中创作、整理、预览和迁移 SillyTavern 角色卡、世界书与预设。npm 包名：`dsh-stcardwriter`。目前未上传npm。
+在 DeepSeek Harness 中创作、整理、预览和迁移 SillyTavern 角色卡、世界书与预设。当前插件版本：`0.5.1-rc.2`；npm 包名：`dsh-stcardwriter`，目前尚未发布到 npm。
 
 面向 DeepSeek Harness `0.1.1-rc.2`，提供“酒馆创作模式”Agent 预设和三栏工作台：左侧连接 Harness 并管理项目，中间编辑资源，右侧实时预览。内置本地 SillyTavern 连接器；提示词与伪装消息注入由直接依赖的 [DSH Preset Plus](https://github.com/Rain-kl/dsh-preset-plus) 统一提供。
 
@@ -56,7 +56,7 @@ dsh --profile web
 npm install
 npm test
 npm pack
-dsh plugin --profile web add .\dsh-stcardwriter-0.4.0.tgz
+dsh plugin --profile web add .\dsh-stcardwriter-0.5.1-rc.2.tgz
 ```
 
 开发期也可以直接链接当前目录：

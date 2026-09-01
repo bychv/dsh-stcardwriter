@@ -165,7 +165,11 @@ function EmbeddedWorldbookEditor({ asset, change }: { asset: TavernAsset; change
     mutate(nested)
     inner.character_book = nested.data
   })
-  return <details className="stcw-embedded-book"><summary>内嵌世界书 · 可写作与触发预览</summary><div className="stcw-row"><span className="stcw-safe-note">保存在角色卡 character_book 中，导出与原卡同行。</span><button className="danger" onClick={remove}>移除内嵌世界书</button></div><WorldbookEditor asset={bookAsset} change={changeBook} /><div className="stcw-embedded-preview"><Preview asset={bookAsset} /></div></details>
+  const rename = (value: string) => change(next => {
+    const embedded = innerCharacter(next).character_book
+    if (embedded && typeof embedded === 'object' && !Array.isArray(embedded)) embedded.name = value
+  })
+  return <details className="stcw-embedded-book"><summary>内嵌世界书 · 可写作与触发预览</summary><div className="stcw-row"><span className="stcw-safe-note">保存在角色卡 character_book 中，导出与原卡同行。</span><button className="danger" onClick={remove}>移除内嵌世界书</button></div><TextField label="世界书标题" value={typeof book.name === 'string' ? book.name : ''} onChange={rename} /><WorldbookEditor asset={bookAsset} change={changeBook} /><div className="stcw-embedded-preview"><Preview asset={bookAsset} /></div></details>
 }
 
 function PresetPlusEditor({ asset, change }: { asset: TavernAsset; change: (mutate: (asset: TavernAsset) => void) => void }) {
@@ -277,7 +281,7 @@ function RawEditor({ asset, apply }: { asset: TavernAsset; apply: (data: any) =>
   return <details className="stcw-raw"><summary>原始 JSON（保真编辑）</summary><textarea value={raw} onChange={e => setRaw(e.target.value)} rows={18} /><div className="stcw-row"><button onClick={parse}>应用 JSON</button><span>{error}</span></div></details>
 }
 
-function includesKeyword(text: string, keyword: string, sensitive: boolean, whole: boolean): boolean {
+export function includesKeyword(text: string, keyword: string, sensitive: boolean, whole: boolean): boolean {
   if (!keyword) return false
   const haystack = sensitive ? text : text.toLocaleLowerCase()
   const needle = sensitive ? keyword : keyword.toLocaleLowerCase()
@@ -285,24 +289,39 @@ function includesKeyword(text: string, keyword: string, sensitive: boolean, whol
   return new RegExp(`(^|[^\\p{L}\\p{N}_])${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\p{L}\\p{N}_]|$)`, sensitive ? 'u' : 'iu').test(text)
 }
 
-function activeLoreEntries(asset: TavernAsset, scan: string): any[] {
-  const entries = Object.values(worldEntries(asset))
-  return entries.filter(entry => {
-    if (entry.disable === true) return false
-    if (entry.constant === true) return true
-    const primary = Array.isArray(entry.key) ? entry.key : []
-    const secondary = Array.isArray(entry.keysecondary) ? entry.keysecondary : []
+interface KeywordMatch { keyword: string; matched: boolean }
+interface LoreInspection { id: string; entry: any; active: boolean; state: string; primary: KeywordMatch[]; secondary: KeywordMatch[]; secondaryLogic: number }
+
+export function inspectLoreEntries(asset: TavernAsset, scan: string): LoreInspection[] {
+  return Object.entries(worldEntries(asset)).map(([id, entry]) => {
+    const primary: string[] = Array.isArray(entry.key) ? entry.key.filter((key: unknown): key is string => typeof key === 'string') : []
+    const secondary: string[] = Array.isArray(entry.keysecondary) ? entry.keysecondary.filter((key: unknown): key is string => typeof key === 'string') : []
     const match = (key: unknown) => typeof key === 'string' && includesKeyword(scan, key, entry.caseSensitive === true, entry.matchWholeWords === true)
-    if (!primary.some(match)) return false
-    if (entry.selective === false || secondary.length === 0) return true
-    const matches = secondary.map(match)
-    switch (Number(entry.selectiveLogic ?? 0)) {
-      case 1: return !matches.every(Boolean)
-      case 2: return !matches.some(Boolean)
-      case 3: return matches.every(Boolean)
-      default: return matches.some(Boolean)
+    const primaryMatches = primary.map(keyword => ({ keyword, matched: match(keyword) }))
+    const secondaryMatches = secondary.map(keyword => ({ keyword, matched: match(keyword) }))
+    const secondaryLogic = Number(entry.selectiveLogic ?? 0)
+    let active = false
+    let state = '主关键词未命中'
+    if (entry.disable === true) state = '已禁用'
+    else if (entry.constant === true) { active = true; state = '常驻' }
+    else if (primaryMatches.some(item => item.matched)) {
+      const matches = secondaryMatches.map(item => item.matched)
+      active = entry.selective === false || matches.length === 0
+        ? true
+        : secondaryLogic === 1 ? !matches.every(Boolean)
+          : secondaryLogic === 2 ? !matches.some(Boolean)
+            : secondaryLogic === 3 ? matches.every(Boolean)
+              : matches.some(Boolean)
+      state = active ? '已触发' : '次关键词条件未满足'
     }
-  }).sort((a, b) => Number(a.order ?? 100) - Number(b.order ?? 100))
+    return { id, entry, active, state, primary: primaryMatches, secondary: secondaryMatches, secondaryLogic }
+  }).sort((a, b) => Number(a.entry.order ?? 100) - Number(b.entry.order ?? 100))
+}
+
+const SECONDARY_LOGIC_LABEL: Record<number, string> = { 0: '任一命中', 1: '不可全部命中', 2: '均不可命中', 3: '必须全部命中' }
+
+function KeywordMatches({ label, values }: { label: string; values: KeywordMatch[] }) {
+  return <div className="stcw-keyword-row"><small>{label}</small><div>{values.length ? values.map((item, index) => <span key={item.keyword + '-' + index} className={item.matched ? 'matched' : ''}>{item.keyword}</span>) : <em>未设置</em>}</div></div>
 }
 
 function Preview({ asset }: { asset: TavernAsset }) {
@@ -314,9 +333,10 @@ function Preview({ asset }: { asset: TavernAsset }) {
       <h4>第一条消息</h4><pre>{field(data, 'first_mes') || '尚未填写'}</pre><h4>场景</h4><pre>{field(data, 'scenario') || '尚未填写'}</pre><h4>角色描述</h4><pre>{field(data, 'description') || '尚未填写'}</pre></div>
   }
   if (asset.kind === 'worldbook') {
-    const active = activeLoreEntries(asset, scan)
-    return <div><h3>世界书激活预览</h3><TextField label="模拟聊天文本" multiline value={scan} onChange={setScan} /><div className="stcw-preview-note">命中 {active.length} 个条目（预览关键词与逻辑；概率/递归由 SillyTavern 最终执行）</div>
-      {active.map((entry, index) => <article className="stcw-lore-hit" key={index}><b>{entry.comment || `条目 ${index + 1}`}</b><small>{Array.isArray(entry.key) ? entry.key.join(', ') : ''}</small><pre>{entry.content}</pre></article>)}</div>
+    const inspected = inspectLoreEntries(asset, scan)
+    const active = inspected.filter(item => item.active)
+    return <div><h3>{field(asset.data, 'name') || asset.name || '世界书'} · 触发预览</h3><TextField label="模拟聊天文本" multiline value={scan} onChange={setScan} /><div className="stcw-preview-note">命中 {active.length}/{inspected.length} 个条目（绿色关键词已命中；概率/递归由 SillyTavern 最终执行）</div>
+      {inspected.length ? inspected.map(item => <article className={'stcw-lore-hit ' + (item.active ? 'active' : 'inactive')} key={item.id}><div className="stcw-lore-head"><b>{item.entry.comment || '条目 ' + item.id}</b><span>{item.state}</span></div><KeywordMatches label="主关键词" values={item.primary} />{item.entry.selective !== false && item.secondary.length > 0 && <KeywordMatches label={'次关键词 · ' + (SECONDARY_LOGIC_LABEL[item.secondaryLogic] || '逻辑 ' + item.secondaryLogic)} values={item.secondary} />}{item.active && <pre>{item.entry.content}</pre>}</article>) : <pre>尚无世界书条目</pre>}</div>
   }
   if (asset.format === 'preset-plus-preset') {
     const entries: any[] = Array.isArray(asset.data.entries) ? asset.data.entries as any[] : []
@@ -622,7 +642,7 @@ const EXTRA_CSS = `
 .stcw-composer-button{border:0;background:transparent;color:inherit;padding:4px 7px;border-radius:6px;cursor:pointer}.stcw-composer-button:hover{background:color-mix(in srgb,currentColor 10%,transparent)}
 .stcw-studio{display:grid;grid-template-columns:330px minmax(0,1fr);min-height:0;flex:1}.stcw-ai-pane{min-height:0;overflow:auto;padding:12px;border-right:1px solid #302a3a;background:#121019}.stcw-resource-pane{min-width:0;min-height:0}.stcw-resource-grid{height:100%;display:grid;grid-template-columns:minmax(480px,1fr) minmax(300px,36%);min-height:0}.stcw-panel-title{text-transform:uppercase;letter-spacing:.12em;font-size:11px;color:#aa95ba;margin:3px 0 9px}.stcw-harness{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-harness textarea{width:100%;resize:vertical}.stcw-harness-actions{display:flex;gap:7px;margin-top:8px}.stcw-harness-actions button{flex:1}.stcw-workbench button.primary{background:#694697;border-color:#9367c8}.stcw-workbench button:disabled{opacity:.45;cursor:not-allowed}.stcw-ai-pane>.stcw-assets{border:0;padding:0;max-height:35vh;overflow:auto}.stcw-migrate{margin-top:12px;border-top:1px solid #302a3a;padding-top:10px}.stcw-migrate summary,.stcw-resources summary{cursor:pointer;color:#ccb5e6;font-weight:700;margin-bottom:9px}.stcw-migrate-list{max-height:190px;overflow:auto;margin:8px 0}.stcw-migrate-list label{display:flex;gap:7px;padding:6px;border-radius:6px}.stcw-migrate-list label:hover{background:#211b29}.stcw-migrate-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-migrate-list small{color:#9e90aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-safe-note{color:#aee6c1;background:#153421;padding:7px;border-radius:6px;font-size:12px}.stcw-resources{border:1px solid #3d3548;border-radius:8px;padding:9px;margin-bottom:12px}.stcw-resource-badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px}.stcw-resource-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-resource-badges span.ok{background:#16422a;color:#aee6c1}.stcw-resource-row{display:grid;grid-template-columns:minmax(100px,1fr) auto;gap:2px 8px;padding:6px;border-top:1px solid #2e2736}.stcw-resource-row code{grid-column:1/3;color:#9f90ae;word-break:break-all}.stcw-resource-row em{grid-column:1/3;color:#ffafba}.stcw-workbench header small{color:#998ca5;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-connector{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-connector summary{cursor:pointer;color:#ccb5e6;font-weight:700}.stcw-connector input:not([type=checkbox]){width:100%}.stcw-connector .stcw-row{margin:8px 0;gap:6px}.stcw-connector .stcw-row input{flex:1}.stcw-connector .stcw-row select{flex:0 0 auto}.stcw-connector button{margin-top:4px}.stcw-connector button.danger{margin-top:10px}.stcw-probe-result{margin-top:9px;display:flex;flex-direction:column;gap:7px}.stcw-probe-error{color:#ffafba;background:#3a1b22;padding:7px;border-radius:6px;font-size:12px}.stcw-cat-badges{display:flex;gap:5px;flex-wrap:wrap;margin:4px 0}.stcw-cat-badges span{padding:3px 7px;border-radius:12px;background:#30283a;font-size:11px}.stcw-cat-badges span.ok{background:#16422a;color:#aee6c1}.stcw-remote-group{margin-top:8px;border-top:1px solid #302a3a;padding-top:7px}.stcw-remote-group summary{font-weight:600;color:#c9b6de;cursor:pointer}.stcw-remote-all{display:flex;gap:7px;align-items:center;margin:5px 0}.stcw-remote-list{max-height:190px;overflow:auto;margin:4px 0}.stcw-remote-list label{display:flex;gap:7px;align-items:center;padding:4px 5px;border-radius:6px}.stcw-remote-list label:hover{background:#211b29}.stcw-remote-list label>span{display:flex;min-width:0;flex-direction:column}.stcw-remote-list label b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stcw-remote-list small{color:#9e90aa}.stcw-dshprompt{border:1px solid #493c59;background:#1a1622;border-radius:10px;padding:11px;margin-bottom:14px}.stcw-dshprompt .stcw-field{margin:9px 0}.stcw-dshprompt textarea{width:100%;resize:vertical}.stcw-dshprompt .stcw-row{margin-top:9px}.stcw-dshprompt .stcw-row .stcw-hint{flex:1}@media(max-width:1150px){.stcw-studio{grid-template-columns:285px minmax(0,1fr)}.stcw-resource-grid{grid-template-columns:minmax(420px,1fr) 300px}}`
 
-const EMBEDDED_CSS = `.stcw-embedded-book{margin-top:18px;border:1px solid #493b57;border-radius:9px;padding:10px}.stcw-embedded-book>summary{cursor:pointer;color:#d1b6ea;font-weight:700}.stcw-embedded-book>.stcw-world-editor{margin-top:12px}.stcw-embedded-preview{margin-top:14px;border-top:1px solid #342d3e;padding-top:10px}`
+const EMBEDDED_CSS = `.stcw-embedded-book{margin-top:18px;border:1px solid #493b57;border-radius:9px;padding:10px}.stcw-embedded-book>summary{cursor:pointer;color:#d1b6ea;font-weight:700}.stcw-embedded-book>.stcw-field{margin:12px 0}.stcw-embedded-book>.stcw-world-editor{margin-top:12px}.stcw-embedded-preview{margin-top:14px;border-top:1px solid #342d3e;padding-top:10px}.stcw-lore-hit.inactive{opacity:.62}.stcw-lore-hit.active{border-color:#397452;background:#14251c}.stcw-lore-head{display:flex;justify-content:space-between;gap:8px}.stcw-lore-head span{color:#b6a6c4;font-size:11px}.stcw-keyword-row{margin-top:8px}.stcw-keyword-row>small{display:block;color:#a795b7;margin-bottom:4px}.stcw-keyword-row>div{display:flex;gap:4px;flex-wrap:wrap}.stcw-keyword-row span{border:1px solid #4a4056;border-radius:12px;padding:2px 6px;font-size:11px}.stcw-keyword-row span.matched{border-color:#3f8b61;background:#1e5034;color:#c5f4d5}.stcw-keyword-row em{color:#786e81;font-size:11px}`
 
 function installStyle(): () => void {
   const style = document.createElement('style'); style.dataset.dshStcardwriter = 'true'; style.textContent = CSS + EXTRA_CSS + EMBEDDED_CSS; document.head.append(style); return () => style.remove()
