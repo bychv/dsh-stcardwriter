@@ -1,6 +1,6 @@
 {
   "name": "dsh-stcardwriter",
-  "version": "0.5.2-alpha.3",
+  "version": "0.5.2-rc.1",
   "description": "DeepSeek Harness authoring mode for SillyTavern character cards, lorebooks, and presets, with a local SillyTavern connector and Preset Plus integration.",
   "type": "module",
   "main": "./dist/index.js",
