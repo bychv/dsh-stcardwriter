@@ -7,6 +7,8 @@ import type { RemoteConflictPolicy, RemoteCategoryId } from './connector.js'
 import { exportAsset, exportProject, isObject } from './format.js'
 import { ProjectStore, resolveWorkspaceDataRoot } from './store.js'
 import type { AssetKind, TavernAsset } from './types.js'
+import { ModeError } from './authoring-mode.js'
+import type { AuthoringModeController } from './authoring-mode.js'
 
 export const API_PREFIX = '/api/dsh-stcardwriter'
 const MAX_BODY = 80 * 1024 * 1024
@@ -113,13 +115,22 @@ export function createWorkspaceStoreResolver(): (req: IncomingMessage) => Projec
   }
 }
 
-export function createApiHandler(storeOrResolver: ProjectStore | ((req: IncomingMessage) => ProjectStore)) {
+export function createApiHandler(storeOrResolver: ProjectStore | ((req: IncomingMessage) => ProjectStore), modes?: AuthoringModeController) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
       const method = req.method || 'GET'
       const { parts, query } = relativePath(req)
       if (method === 'OPTIONS') {
         res.writeHead(204, { allow: 'GET, POST, PUT, DELETE, OPTIONS' }); res.end(); return
+      }
+      if (parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'mode') {
+        if (!modes) throw new HttpError(503, '当前宿主未提供会话工具模式切换')
+        if (method === 'GET') return json(res, 200, modes.get(parts[1]))
+        if (method === 'PUT') {
+          const body = await readJson(req)
+          return json(res, 200, modes.set(parts[1], body.mode))
+        }
+        throw new HttpError(405, '不支持的请求')
       }
       const store = typeof storeOrResolver === 'function' ? storeOrResolver(req) : storeOrResolver
       if (parts.length === 1 && parts[0] === 'projects') {
@@ -226,7 +237,7 @@ export function createApiHandler(storeOrResolver: ProjectStore | ((req: Incoming
       throw new HttpError(405, '不支持的请求')
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      const code = error instanceof HttpError ? error.status : /ENOENT/.test(message) ? 404 : 500
+      const code = error instanceof HttpError || error instanceof ModeError ? error.status : /ENOENT/.test(message) ? 404 : 500
       json(res, code, { error: message })
     }
   }

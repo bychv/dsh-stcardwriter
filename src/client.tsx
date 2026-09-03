@@ -1,5 +1,7 @@
-import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { AssetKind, TavernAsset, TavernProject } from './types.js'
+import type { AuthoringMode, AuthoringModeStatus } from './authoring-mode.js'
+import { convertWorldbook, WORLD_ENTRY_DEFAULTS } from './resource-format.js'
 
 const API = '/api/dsh-stcardwriter'
 const listeners = new Set<() => void>()
@@ -53,11 +55,22 @@ function HarnessComposerAction({ sessionId, inputActions }: { sessionId: string;
 function field(data: any, key: string): string { return typeof data?.[key] === 'string' ? data[key] : '' }
 function innerCharacter(asset: TavernAsset): any { return asset.data && typeof asset.data.data === 'object' ? asset.data.data : asset.data }
 
-function embeddedBookAsset(asset: TavernAsset): TavernAsset | undefined {
+export function embeddedBookAsset(asset: TavernAsset): TavernAsset | undefined {
   if (asset.kind !== 'character') return undefined
   const book = innerCharacter(asset).character_book
   if (!book || typeof book !== 'object' || Array.isArray(book)) return undefined
-  return { ...asset, kind: 'worldbook' as const, format: 'worldbook' as const, name: typeof book.name === 'string' && book.name ? book.name : `${asset.name} 世界书`, data: book }
+  // The editor uses native WI fields, while persistence must use CC entries[].
+  // Keep malformed imports available for raw JSON repair instead of crashing UI.
+  let view = book
+  try { view = convertWorldbook(book, 'worldbook') } catch { /* raw JSON editor remains available */ }
+  return { ...asset, kind: 'worldbook' as const, format: 'worldbook' as const, name: typeof book.name === 'string' && book.name ? book.name : `${asset.name} 世界书`, data: view }
+}
+
+export function editEmbeddedBook(asset: TavernAsset, mutate: (book: TavernAsset) => void): void {
+  const nested = embeddedBookAsset(asset)
+  if (!nested) throw new Error('角色卡没有内嵌世界书')
+  mutate(nested)
+  innerCharacter(asset).character_book = convertWorldbook(nested.data, 'character', 'worldbook')
 }
 
 function TextField(props: { label: string; value: string; multiline?: boolean; onChange: (value: string) => void }) {
@@ -93,12 +106,7 @@ function CharacterEditor({ asset, change }: { asset: TavernAsset; change: (mutat
   </div>
 }
 
-const ENTRY_DEFAULTS: Record<string, unknown> = {
-  key: [], keysecondary: [], comment: '', content: '', constant: false, vectorized: false,
-  selective: true, selectiveLogic: 0, order: 100, position: 0, disable: false,
-  ignoreBudget: false, excludeRecursion: false, preventRecursion: false, probability: 100,
-  useProbability: true, depth: 4, group: '', groupOverride: false, groupWeight: 100,
-}
+const ENTRY_DEFAULTS = WORLD_ENTRY_DEFAULTS
 
 function worldEntries(asset: TavernAsset): Record<string, any> {
   const current: any = asset.data.entries
@@ -127,7 +135,7 @@ function WorldbookEditor({ asset, change, selected, onSelect }: { asset: TavernA
     change(next => {
       const all = worldEntries(next)
       next.data.entries = all
-      all[id] = { ...ENTRY_DEFAULTS, uid: Number(id) }
+      all[id] = { ...structuredClone(ENTRY_DEFAULTS), uid: Number(id), displayIndex: Number(id) }
     })
     pick(id)
   }
@@ -166,16 +174,11 @@ function WorldbookEditor({ asset, change, selected, onSelect }: { asset: TavernA
 function EmbeddedWorldbookEditor({ asset, change, selected, onSelect }: { asset: TavernAsset; change: (mutate: (asset: TavernAsset) => void) => void; selected?: string; onSelect?: (id: string) => void }) {
   const data = innerCharacter(asset)
   const book = data.character_book && typeof data.character_book === 'object' && !Array.isArray(data.character_book) ? data.character_book : undefined
-  const create = () => change(next => { innerCharacter(next).character_book = { name: `${next.name} 世界书`, description: '', entries: [] } })
+  const create = () => change(next => { innerCharacter(next).character_book = { name: `${next.name} 世界书`, description: '', extensions: {}, entries: [] } })
   const remove = () => { if (confirm('移除这张角色卡的内嵌世界书？其他附属资源不会受影响。')) change(next => { delete innerCharacter(next).character_book }) }
   if (!book) return <details className="stcw-embedded-book"><summary>内嵌世界书</summary><p className="stcw-hint">这张角色卡目前没有 character_book。</p><button onClick={create}>＋ 新建内嵌世界书</button></details>
   const bookAsset = embeddedBookAsset(asset)!
-  const changeBook = (mutate: (asset: TavernAsset) => void) => change(next => {
-    const inner = innerCharacter(next)
-    const nested = { ...next, kind: 'worldbook' as const, format: 'worldbook' as const, data: inner.character_book }
-    mutate(nested)
-    inner.character_book = nested.data
-  })
+  const changeBook = (mutate: (asset: TavernAsset) => void) => change(next => editEmbeddedBook(next, mutate))
   const rename = (value: string) => change(next => {
     const embedded = innerCharacter(next).character_book
     if (embedded && typeof embedded === 'object' && !Array.isArray(embedded)) embedded.name = value
@@ -614,8 +617,58 @@ function ConnectorPanel({ project, accept, notice }: { project: TavernProject; a
   </section>
 }
 
+export function AuthoringModeControl({ sessionId }: { sessionId?: string }) {
+  const [status, setStatus] = useState<AuthoringModeStatus | null>(null)
+  const [error, setError] = useState('')
+  const [switchError, setSwitchError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const mutation = useRef<AbortController | null>(null)
+  useEffect(() => () => mutation.current?.abort(), [])
+  useEffect(() => {
+    if (!sessionId || saving) return
+    const controller = new AbortController()
+    let pending = false
+    const refresh = async () => {
+      if (pending) return
+      pending = true
+      try {
+        const next = await api<AuthoringModeStatus>(`/sessions/${encodeURIComponent(sessionId)}/mode`, { signal: controller.signal })
+        if (!controller.signal.aborted) { setStatus(next); setError('') }
+      } catch (reason) {
+        if (!controller.signal.aborted) { setError(reason instanceof Error ? reason.message : String(reason)); setStatus(null) }
+      } finally { pending = false }
+    }
+    void refresh()
+    const timer = setInterval(() => void refresh(), 2000)
+    return () => { controller.abort(); clearInterval(timer) }
+  }, [sessionId, saving])
+  const change = async (mode: AuthoringMode) => {
+    if (!sessionId || !status?.canSwitch || saving) return
+    const controller = new AbortController()
+    mutation.current = controller
+    setSaving(true); setSwitchError('')
+    try {
+      const next = await api<AuthoringModeStatus>(`/sessions/${encodeURIComponent(sessionId)}/mode`, {
+        method: 'PUT', body: JSON.stringify({ mode }), signal: controller.signal,
+      })
+      if (!controller.signal.aborted) setStatus(next)
+    } catch (reason) {
+      if (!controller.signal.aborted) setSwitchError(reason instanceof Error ? reason.message : String(reason))
+    } finally { if (!controller.signal.aborted) setSaving(false) }
+  }
+  return <div className="stcw-session-mode" aria-label="当前对话工具模式">
+    <label>工具模式 <select aria-label="工具模式" value={status?.mode ?? ''} disabled={!status?.canSwitch || saving} onChange={event => void change(event.target.value as AuthoringMode)}>
+      {!status && <option value="">{sessionId ? '等待会话状态' : '请先选择对话'}</option>}
+      <option value="standard">标准模式</option><option value="minimal">极简模式</option>
+    </select></label>
+    <span className="stcw-hint" role="status">{saving ? '正在切换…' : switchError || error || (!sessionId ? '请打开酒馆创作模式的对话。' : status ? `${status.toolCount} 个可用工具 · ${status.canSwitch ? '仅影响当前对话，保留聊天记录' : '正在回复，请结束后再切换'}` : '正在读取…')}</span>
+    <small>极简保留酒馆工具、提问与退出计划；标准恢复通用工具。Preset Plus 在两种模式下均生效。</small>
+  </div>
+}
+
 function Workbench(props: any) {
   const isOpen = useSyncExternalStore(subscribe, () => opened)
+  const currentSessionId = props.useSessions((state: any) => state.current)
   const currentWorkspace = props.useSessions((state: any) => state.current ? state.byId[state.current]?.cwd : undefined)
   const recentWorkspace = props.useWorkspaces((state: any) => state.items.find((item: any) => item.workspaceId === state.recentWorkspaceId)?.path)
   const workspacePath = currentWorkspace || recentWorkspace || ''
@@ -663,12 +716,7 @@ function Workbench(props: any) {
   const changeLoreBook = (mutate: (book: TavernAsset) => void) => {
     if (!asset) return
     if (asset.kind === 'worldbook') { changeAsset(mutate); return }
-    changeAsset(next => {
-      const inner = innerCharacter(next)
-      const nested = { ...next, kind: 'worldbook' as const, format: 'worldbook' as const, data: inner.character_book }
-      mutate(nested)
-      inner.character_book = nested.data
-    })
+    changeAsset(next => editEmbeddedBook(next, mutate))
   }
   const lore: LorePaneContext | undefined = loreBook ? {
     book: loreBook,
@@ -707,6 +755,7 @@ function Workbench(props: any) {
   }
   return <div className="stcw-layer"><div className="stcw-workbench">
     <header><div><b>✦ 酒馆创作模式</b><select value={project?.id || ''} onChange={e => void pickProject(e.target.value)}><option value="">选择项目</option>{projects.map(item => <option key={item.id} value={item.id}>{item.name} ({item.assetCount})</option>)}</select><button onClick={() => void createProject()}>新建空项目</button><small title={workspacePath}>工作区 · {workspacePath.replaceAll('\\', '/').split('/').at(-1)}</small></div><button className="stcw-close" onClick={() => setOpened(false)}>×</button></header>
+    <AuthoringModeControl key={currentSessionId || 'no-session'} sessionId={currentSessionId} />
     {!project ? <main className="stcw-welcome"><h2>从空项目开始</h2><p>可批量导入角色卡、世界书和预设，也可以逐项新建。</p><button onClick={() => void createProject()}>新建空项目</button></main> : <>
       <div className="stcw-toolbar"><input className="stcw-project-name" value={project.name} onChange={e => setProject({ ...project, name: e.target.value })} onBlur={() => void api(`/projects/${project.id}`, { method: 'PUT', body: JSON.stringify({ name: project.name }) }).then(() => loadProjects(project.id))} />
         <label className="stcw-file" title="可一次选择多个 JSON、PNG、CHARX 或 ZIP">导入资源<input type="file" multiple accept=".json,.png,.charx,.zip,application/json,image/png,application/zip" onChange={e => { void importFiles(e.target.files); e.currentTarget.value = '' }} /></label>
@@ -729,6 +778,7 @@ function Workbench(props: any) {
 }
 
 const CSS = `
+.stcw-session-mode{padding:9px 14px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;border-bottom:1px solid #302a3a;background:#1a1622}.stcw-session-mode label{display:flex;align-items:center;gap:8px}.stcw-session-mode small{width:100%;color:#a795b7}.stcw-session-mode select:disabled{opacity:.6;cursor:not-allowed}
 .stcw-sidebar-button{border:0;background:transparent;color:inherit;display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;white-space:nowrap}.stcw-sidebar-button:hover{background:color-mix(in srgb,currentColor 10%,transparent)}
 .stcw-layer{position:fixed;inset:0;z-index:10000;background:rgba(8,7,12,.7);backdrop-filter:blur(8px);pointer-events:auto;padding:20px;color:#eee;font:14px/1.45 Inter,system-ui,sans-serif}.stcw-workbench{height:100%;display:flex;flex-direction:column;background:#15121d;border:1px solid #3a3347;border-radius:16px;box-shadow:0 24px 80px #0009;overflow:hidden}.stcw-workbench header{height:58px;padding:0 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #302a3a;background:#1c1825}.stcw-workbench header>div{display:flex;align-items:center;gap:12px}.stcw-workbench button,.stcw-button,.stcw-file{border:1px solid #51475f;background:#282232;color:#eee;padding:7px 10px;border-radius:7px;cursor:pointer;text-decoration:none}.stcw-workbench button:hover,.stcw-button:hover,.stcw-file:hover{background:#373043}.stcw-button.disabled{opacity:.45;cursor:not-allowed;pointer-events:none}.stcw-workbench button.danger{border-color:#7a3f4b;color:#ffabb8}.stcw-close{font-size:24px!important;line-height:1;padding:5px 10px!important}.stcw-workbench select,.stcw-workbench input,.stcw-workbench textarea{background:#100e16;color:#eee;border:1px solid #463d52;border-radius:6px;padding:8px;box-sizing:border-box}.stcw-file input{display:none}.stcw-toolbar{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid #302a3a;overflow-x:auto}.stcw-project-name{font-weight:700;width:220px;flex:0 0 auto}.stcw-notice{color:#b9a7cf;margin-left:auto;white-space:nowrap}.stcw-columns{display:grid;grid-template-columns:230px minmax(420px,1fr) 360px;min-height:0;flex:1}.stcw-assets,.stcw-editor,.stcw-preview{min-height:0;overflow:auto}.stcw-assets{padding:9px;border-right:1px solid #302a3a}.stcw-assets>button{display:grid;width:100%;text-align:left;margin-bottom:7px;grid-template-columns:auto 1fr;gap:2px 8px}.stcw-assets>button>span{grid-row:1/3;background:#493c5b;color:#d8c8ec;font-size:11px;padding:3px 5px;border-radius:4px;align-self:center}.stcw-assets small,.stcw-entry-list small{color:#9d91a9}.stcw-assets .active,.stcw-entry-list .active{border-color:#9b75ce;background:#392c4a}.stcw-editor{padding:14px}.stcw-editor-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:14px;position:sticky;top:-14px;background:#15121ded;padding:10px 0;z-index:2}.stcw-editor-head>div{display:flex;gap:7px;align-items:center}.stcw-editor-head input{font-size:18px;font-weight:700}.stcw-form{display:flex;flex-direction:column;gap:10px}.stcw-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.stcw-field{display:flex;flex-direction:column;gap:5px}.stcw-field>span{color:#bcaec9;font-size:12px}.stcw-field textarea{width:100%;resize:vertical}.stcw-world-editor{display:grid;grid-template-columns:180px 1fr;gap:12px}.stcw-entry-list{display:flex;flex-direction:column;gap:6px;max-height:68vh;overflow:auto}.stcw-entry-list>button{display:flex;flex-direction:column;text-align:left}.stcw-entry-form{display:flex;flex-direction:column;gap:10px}.stcw-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.stcw-checks{display:flex;gap:14px;flex-wrap:wrap}.stcw-checks label{display:flex;align-items:center;gap:5px}.stcw-raw{margin-top:18px;border-top:1px solid #342d3e;padding-top:12px}.stcw-raw summary{cursor:pointer;color:#bda5d8}.stcw-raw textarea{width:100%;font:12px/1.45 ui-monospace,monospace;margin-top:8px}.stcw-preview{border-left:1px solid #302a3a;background:#100e16;padding:15px}.stcw-preview-title{text-transform:uppercase;letter-spacing:.14em;font-size:11px;color:#a28eaf;margin-bottom:12px}.stcw-preview pre{white-space:pre-wrap;word-break:break-word;font:13px/1.55 inherit}.stcw-avatar{width:72px;height:72px;border-radius:50%;display:grid;place-items:center;margin:10px auto;background:linear-gradient(135deg,#9a67cc,#4d78bd);font-size:30px}.stcw-preview-card h2{text-align:center}.stcw-tags{display:flex;justify-content:center;flex-wrap:wrap;gap:5px}.stcw-tags span{background:#332740;padding:3px 7px;border-radius:20px;font-size:11px}.stcw-lore-hit,.stcw-prompt{border:1px solid #3b3247;border-radius:8px;padding:10px;margin:9px 0;background:#191520}.stcw-lore-hit small{display:block;color:#a795b7}.stcw-prompt>div{display:flex;justify-content:space-between}.stcw-prompt span{color:#a795b7}.stcw-preview-note,.stcw-hint{color:#a99ab7;font-size:12px}.stcw-empty,.stcw-welcome{display:grid;place-content:center;text-align:center;color:#9f93aa;min-height:180px}.stcw-welcome{flex:1}.stcw-welcome button{justify-self:center}@media(max-width:1050px){.stcw-columns{grid-template-columns:180px minmax(380px,1fr) 300px}}`
 

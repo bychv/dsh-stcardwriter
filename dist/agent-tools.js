@@ -1110,6 +1110,389 @@ function writeCharacterToPng(input, v2, v3, extendedAssets) {
   return Buffer.concat(output2);
 }
 
+// src/resource-format.ts
+var object = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+var own = (v, key) => Object.hasOwn(v, key);
+var pathKey = (path, key) => `${path}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`;
+var equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+var integerId = (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+var WORLD_ENTRY_DEFAULTS = {
+  key: [],
+  keysecondary: [],
+  comment: "",
+  content: "",
+  constant: false,
+  vectorized: false,
+  selective: true,
+  selectiveLogic: 0,
+  addMemo: true,
+  order: 100,
+  position: 0,
+  disable: false,
+  ignoreBudget: false,
+  excludeRecursion: false,
+  preventRecursion: false,
+  matchPersonaDescription: false,
+  matchCharacterDescription: false,
+  matchCharacterPersonality: false,
+  matchCharacterDepthPrompt: false,
+  matchScenario: false,
+  matchCreatorNotes: false,
+  delayUntilRecursion: false,
+  probability: 100,
+  useProbability: true,
+  depth: 4,
+  outletName: "",
+  group: "",
+  groupOverride: false,
+  groupWeight: 100,
+  scanDepth: null,
+  caseSensitive: null,
+  matchWholeWords: null,
+  useGroupScoring: null,
+  automationId: "",
+  role: null,
+  sticky: 0,
+  cooldown: 0,
+  delay: 0,
+  triggers: [],
+  displayIndex: 0,
+  characterFilter: { isExclude: false, names: [], tags: [] }
+};
+var EXTENSIONS = {
+  position: "position",
+  excludeRecursion: "exclude_recursion",
+  preventRecursion: "prevent_recursion",
+  displayIndex: "display_index",
+  probability: "probability",
+  useProbability: "useProbability",
+  depth: "depth",
+  selectiveLogic: "selectiveLogic",
+  outletName: "outlet_name",
+  group: "group",
+  groupOverride: "group_override",
+  groupWeight: "group_weight",
+  delayUntilRecursion: "delay_until_recursion",
+  scanDepth: "scan_depth",
+  matchWholeWords: "match_whole_words",
+  useGroupScoring: "use_group_scoring",
+  caseSensitive: "case_sensitive",
+  automationId: "automation_id",
+  role: "role",
+  vectorized: "vectorized",
+  sticky: "sticky",
+  cooldown: "cooldown",
+  delay: "delay",
+  matchPersonaDescription: "match_persona_description",
+  matchCharacterDescription: "match_character_description",
+  matchCharacterPersonality: "match_character_personality",
+  matchCharacterDepthPrompt: "match_character_depth_prompt",
+  matchScenario: "match_scenario",
+  matchCreatorNotes: "match_creator_notes",
+  triggers: "triggers",
+  ignoreBudget: "ignore_budget"
+};
+var CORE = { uid: "id", key: "keys", keysecondary: "secondary_keys", order: "insertion_order", characterFilter: "character_filter" };
+var Check = class {
+  issues = [];
+  changes = [];
+  issue(path, code, message, fixable = false, severity = "error") {
+    this.issues.push({ path, code, message, fixable, severity });
+  }
+  set(obj, key, value, path) {
+    if (!own(obj, key) || !equal(obj[key], value)) {
+      obj[key] = structuredClone(value);
+      this.changes.push(pathKey(path, key));
+    }
+  }
+  field(obj, key, fallback, path, required = false, nullable = false) {
+    const at = pathKey(path, key);
+    if (!own(obj, key)) {
+      if (required) this.issue(at, "missing", "\u7F3A\u5C11\u5FC5\u586B\u5B57\u6BB5\uFF0C\u53EF\u8865\u9ED8\u8BA4\u503C", true);
+      this.set(obj, key, fallback, path);
+      return;
+    }
+    const v = obj[key];
+    if (v === null && nullable) return;
+    let next = v;
+    if (typeof fallback === "boolean") {
+      if (v === "true" || v === 1) next = true;
+      if (v === "false" || v === 0) next = false;
+    } else if (typeof fallback === "number" && typeof v === "string" && v.trim() && Number.isFinite(Number(v))) next = Number(v);
+    else if (Array.isArray(fallback) && typeof v === "string") next = v ? [v] : [];
+    const valid = Array.isArray(fallback) ? Array.isArray(next) && next.every((item) => typeof item === "string") : object(fallback) ? object(next) : typeof next === typeof fallback && (typeof next !== "number" || Number.isFinite(next));
+    if (!valid) {
+      this.issue(at, "type", "\u5B57\u6BB5\u7C7B\u578B\u9519\u8BEF\uFF1B\u4E0D\u80FD\u5B89\u5168\u8F6C\u6362\uFF0C\u9700\u624B\u52A8\u4FEE\u6B63");
+      return;
+    }
+    if (!equal(v, next)) {
+      this.issue(at, "type", "\u53EF\u65E0\u6B67\u4E49\u8F6C\u6362\u5B57\u6BB5\u7C7B\u578B", true);
+      this.set(obj, key, next, path);
+    }
+  }
+  report() {
+    const errorCount = this.issues.filter((v) => v.severity === "error").length;
+    return {
+      valid: errorCount === 0,
+      repairable: !this.issues.some((v) => v.severity === "error" && !v.fixable),
+      errorCount,
+      warningCount: this.issues.length - errorCount,
+      issues: this.issues,
+      changes: [...new Set(this.changes)]
+    };
+  }
+};
+function dialect(entry) {
+  return own(entry, "keys") || own(entry, "enabled") || own(entry, "insertion_order") || typeof entry.position === "string" ? "character" : "worldbook";
+}
+function translate(entry, target, source, c, path) {
+  if (source === target) return;
+  const ext = object(entry.extensions) ? entry.extensions : {};
+  const move = (from, to) => {
+    if (own(entry, from)) {
+      entry[to] = entry[from];
+      delete entry[from];
+    }
+  };
+  if (target === "character") {
+    for (const [native, embedded] of Object.entries(CORE)) move(native, embedded);
+    if (own(entry, "disable")) {
+      c.field(entry, "disable", false, path);
+      if (typeof entry.disable === "boolean") {
+        entry.enabled = !entry.disable;
+        delete entry.disable;
+      }
+    }
+    for (const [native, embedded] of Object.entries(EXTENSIONS)) {
+      if (own(entry, native)) {
+        ext[embedded] = entry[native];
+        if (native !== "position") delete entry[native];
+      }
+    }
+    if (typeof entry.position === "number") entry.position = entry.position === 0 ? "before_char" : "after_char";
+    if (!own(entry, "use_regex")) entry.use_regex = true;
+    if (!own(entry, "extensions") || object(entry.extensions)) entry.extensions = ext;
+  } else {
+    for (const [native, embedded] of Object.entries(CORE)) move(embedded, native);
+    if (own(entry, "enabled")) {
+      c.field(entry, "enabled", true, path);
+      if (typeof entry.enabled === "boolean") {
+        entry.disable = !entry.enabled;
+        delete entry.enabled;
+      }
+    }
+    const position = entry.position;
+    for (const [native, embedded] of Object.entries(EXTENSIONS)) if (own(ext, embedded)) entry[native] = structuredClone(ext[embedded]);
+    if (!own(ext, "position")) entry.position = position === "before_char" ? 0 : position === "after_char" ? 1 : position ?? 0;
+    if (!own(entry, "caseSensitive") && typeof entry.case_sensitive === "boolean") entry.caseSensitive = entry.case_sensitive;
+  }
+  c.changes.push(path);
+}
+function normalizeEntry(input, target, id, c, path, source = dialect(input)) {
+  const entry = structuredClone(input);
+  if (own(entry, "extensions") && !object(entry.extensions)) c.issue(pathKey(path, "extensions"), "type", "extensions \u5FC5\u987B\u662F\u5BF9\u8C61\uFF0C\u4E0D\u80FD\u4E22\u5F03\u5DF2\u6709\u6269\u5C55");
+  translate(entry, target, source, c, path);
+  const idKey = target === "character" ? "id" : "uid";
+  c.set(entry, idKey, id, path);
+  c.field(entry, idKey, 0, path, true);
+  if (!integerId(entry[idKey])) c.issue(pathKey(path, idKey), "id", "\u6761\u76EE ID \u5FC5\u987B\u662F\u975E\u8D1F\u5B89\u5168\u6574\u6570");
+  if (target === "worldbook") {
+    for (const [key, value] of Object.entries(WORLD_ENTRY_DEFAULTS)) nativeField(entry, key, key === "displayIndex" && integerId(id) ? id : value, c, path);
+  } else {
+    for (const key of ["keys", "secondary_keys"]) c.field(entry, key, [], path, key === "keys");
+    c.field(entry, "content", "", path, true);
+    c.field(entry, "enabled", true, path, true);
+    c.field(entry, "insertion_order", 100, path, true);
+    c.field(entry, "extensions", {}, path, true);
+    c.field(entry, "use_regex", true, path);
+    c.field(entry, "comment", "", path);
+    c.field(entry, "constant", false, path);
+    c.field(entry, "selective", false, path);
+    if (!own(entry, "position")) c.set(entry, "position", "before_char", path);
+    if (!["before_char", "after_char"].includes(String(entry.position))) c.issue(pathKey(path, "position"), "position", "\u5361\u5185 position \u5E94\u4E3A before_char \u6216 after_char\uFF1B\u9AD8\u7EA7\u4F4D\u7F6E\u5B58\u5165 extensions.position");
+    if (object(entry.extensions)) {
+      for (const [native, embedded] of Object.entries(EXTENSIONS)) {
+        const fallback = native === "position" ? entry.position === "before_char" ? 0 : 1 : native === "caseSensitive" && typeof entry.case_sensitive === "boolean" ? entry.case_sensitive : native === "displayIndex" && integerId(id) ? id : WORLD_ENTRY_DEFAULTS[native];
+        nativeField(entry.extensions, native, fallback, c, pathKey(path, "extensions"), embedded);
+      }
+    }
+    if (own(entry, "case_sensitive")) c.field(entry, "case_sensitive", false, path);
+    if (own(entry, "name")) c.field(entry, "name", "", path);
+    if (own(entry, "priority")) c.field(entry, "priority", 0, path);
+  }
+  return entry;
+}
+function nativeField(entry, native, fallback, c, path, key = native) {
+  if (native === "delayUntilRecursion" && integerId(entry[key])) return;
+  const nullableBool = ["caseSensitive", "matchWholeWords", "useGroupScoring"].includes(native);
+  const nullableNumber = ["scanDepth", "role", "sticky", "cooldown", "delay"].includes(native);
+  if (fallback === null && !own(entry, key)) c.set(entry, key, null, path);
+  const effective = fallback === null ? nullableBool ? false : 0 : fallback;
+  c.field(entry, key, effective, path, ["key", "content", "order", "disable"].includes(native), nullableBool || nullableNumber);
+  const v = entry[key];
+  if (typeof v === "number") {
+    if (native === "position" && (!Number.isInteger(v) || v < 0 || v > 7)) c.issue(pathKey(path, key), "range", "\u9152\u9986\u63D2\u5165\u4F4D\u7F6E\u5FC5\u987B\u4E3A 0\u20137 \u7684\u6574\u6570");
+    if (native === "selectiveLogic" && ![0, 1, 2, 3].includes(v)) c.issue(pathKey(path, key), "range", "\u5173\u952E\u8BCD\u903B\u8F91\u5FC5\u987B\u4E3A 0\u20133");
+    if (native === "probability" && (v < 0 || v > 100)) c.issue(pathKey(path, key), "range", "\u6982\u7387\u5FC5\u987B\u5728 0\u2013100 \u4E4B\u95F4");
+    if (native === "role" && ![0, 1, 2].includes(v)) c.issue(pathKey(path, key), "range", "\u89D2\u8272\u5FC5\u987B\u4E3A null \u6216 0/1/2");
+    if (["depth", "scanDepth", "sticky", "cooldown", "delay"].includes(native) && (!Number.isInteger(v) || v < 0)) c.issue(pathKey(path, key), "range", "\u6DF1\u5EA6/\u8BA1\u65F6\u503C\u5FC5\u987B\u4E3A\u975E\u8D1F\u6574\u6570\u6216\u5141\u8BB8\u7684 null");
+  }
+  if (native === "characterFilter" && object(v)) {
+    c.field(v, "isExclude", false, pathKey(path, key));
+    c.field(v, "names", [], pathKey(path, key));
+    c.field(v, "tags", [], pathKey(path, key));
+  }
+}
+function normalizeBook(input, target, c, path, source) {
+  const book = structuredClone(input);
+  if (target === "character") {
+    if (!own(book, "extensions")) c.issue(pathKey(path, "extensions"), "spec-default", "CC \u89C4\u8303\u8981\u6C42\u4E66\u7EA7 extensions\uFF1B\u9152\u9986\u6837\u672C\u53EF\u7701\u7565\uFF0C\u5BFC\u51FA\u8865\u7A7A\u5BF9\u8C61", true, "warning");
+    c.field(book, "extensions", {}, path);
+    for (const key of ["name", "description"]) if (own(book, key)) c.field(book, key, "", path);
+    for (const key of ["scan_depth", "token_budget"]) if (own(book, key)) c.field(book, key, 0, path);
+    if (own(book, "recursive_scanning")) c.field(book, "recursive_scanning", false, path);
+  }
+  if (!own(book, "entries")) {
+    c.issue(pathKey(path, "entries"), "missing", "\u7F3A\u5C11 entries\uFF0C\u53EF\u521B\u5EFA\u7A7A\u6761\u76EE\u96C6\u5408", true);
+    c.set(book, "entries", target === "character" ? [] : {}, path);
+  }
+  const entries = book.entries;
+  if (!Array.isArray(entries) && !object(entries)) {
+    c.issue(pathKey(path, "entries"), "container", "entries \u5FC5\u987B\u4E3A\u6570\u7EC4\u6216\u5BF9\u8C61\uFF0C\u4E0D\u80FD\u4E22\u5F03\u73B0\u6709\u503C");
+    return book;
+  }
+  const array = Array.isArray(entries);
+  if (array !== (target === "character")) c.issue(pathKey(path, "entries"), "container", target === "character" ? "\u968F\u5361\u4E16\u754C\u4E66 entries \u5FC5\u987B\u662F\u6570\u7EC4" : "\u72EC\u7ACB\u4E16\u754C\u4E66 entries \u5FC5\u987B\u662F UID \u5BF9\u8C61", true);
+  const output2 = {};
+  const list = [];
+  const used = /* @__PURE__ */ new Set();
+  for (const [key, raw] of Object.entries(entries)) {
+    const at = pathKey(pathKey(path, "entries"), key);
+    if (!object(raw)) {
+      c.issue(at, "entry", "\u6761\u76EE\u5FC5\u987B\u4E3A\u5BF9\u8C61\uFF0C\u4E0D\u80FD\u4E22\u5F03\u8BE5\u6761\u76EE");
+      list.push(raw);
+      output2[key] = raw;
+      continue;
+    }
+    const from = source ?? (!array && ["key", "order", "disable"].some((field) => own(raw, field)) ? "worldbook" : dialect(raw));
+    const identity = array ? raw.id ?? raw.uid ?? Number(key) : /^(0|[1-9]\d*)$/.test(key) ? Number(key) : key;
+    const id = typeof identity === "string" && /^(0|[1-9]\d*)$/.test(identity) ? Number(identity) : identity;
+    if (used.has(String(id))) c.issue(at, "duplicate-id", "\u91CD\u590D\u6761\u76EE ID\uFF0C\u9700\u8981\u660E\u786E\u5206\u914D\u65B0 ID\uFF0C\u4E0D\u80FD\u8986\u76D6\u5176\u4ED6\u6761\u76EE");
+    used.add(String(id));
+    const normalized = normalizeEntry(raw, target, id, c, at, from);
+    if (!equal(raw, normalized)) c.changes.push(at);
+    list.push(normalized);
+    output2[String(id)] = normalized;
+  }
+  if (array !== (target === "character")) c.changes.push(pathKey(path, "entries"));
+  book.entries = target === "character" ? list : output2;
+  return book;
+}
+var BASE_FIELDS = ["name", "description", "personality", "scenario", "first_mes", "mes_example"];
+var V2_FIELDS = ["creator_notes", "system_prompt", "post_history_instructions", "creator", "character_version"];
+function normalizeAssetFormat(asset) {
+  const c = new Check();
+  if (!object(asset.data)) {
+    c.issue("", "root", "\u8D44\u6E90 data \u9876\u5C42\u5FC5\u987B\u662F JSON \u5BF9\u8C61\uFF1B\u4E0D\u4F1A\u4E22\u5F03\u539F\u503C");
+    return { data: asset.data, report: c.report() };
+  }
+  let card = structuredClone(asset.data);
+  if (asset.kind === "worldbook") card = normalizeBook(card, "worldbook", c, "");
+  else if (asset.kind === "character") {
+    const wrapped = own(card, "spec") || own(card, "spec_version") || object(card.data);
+    if (wrapped && !object(card.data)) {
+      c.issue("/data", "container", "V2/V3 \u89D2\u8272\u5361\u9700\u8981 data \u5BF9\u8C61\uFF1B\u4E0D\u80FD\u731C\u6D4B\u6216\u4E22\u5F03\u5361\u9762\u6570\u636E");
+      return { data: card, report: c.report() };
+    }
+    const data = wrapped ? card.data : card;
+    const root = wrapped ? "/data" : "";
+    let version = 1;
+    if (wrapped) {
+      if (card.spec === "chara_card_v3") version = 3;
+      else if (card.spec === "chara_card_v2") version = 2;
+      else if (card.spec === void 0 && ["2.0", "3.0"].includes(String(card.spec_version))) {
+        version = card.spec_version === "3.0" ? 3 : 2;
+        c.issue("/spec", "spec", "\u53EF\u6839\u636E spec_version \u8865\u5145 spec", true);
+        c.set(card, "spec", `chara_card_v${version}`, "");
+      } else c.issue("/spec", "spec", "\u672A\u77E5\u6216\u7F3A\u5931\u89D2\u8272\u5361 spec\uFF0C\u9700\u660E\u786E\u9009\u62E9 V2/V3");
+      if (version > 1 && card.spec_version !== `${version}.0`) {
+        const future = typeof card.spec_version === "string" && Number(card.spec_version) > version;
+        c.issue("/spec_version", "version", future ? "\u8F83\u65B0\u7684\u89C4\u8303\u7248\u672C\uFF0C\u4E0D\u81EA\u52A8\u964D\u7EA7" : "spec_version \u4E0E spec \u4E0D\u4E00\u81F4", !future, future ? "warning" : "error");
+        if (!future) c.set(card, "spec_version", `${version}.0`, "");
+      }
+    }
+    for (const key of BASE_FIELDS) c.field(data, key, "", root, true);
+    if (version > 1) {
+      for (const key of V2_FIELDS) c.field(data, key, "", root, true);
+      for (const key of ["alternate_greetings", "tags"]) c.field(data, key, [], root, true);
+      c.field(data, "extensions", {}, root, true);
+      if (version === 3) {
+        if (!own(data, "group_only_greetings")) c.issue("/data/group_only_greetings", "spec-default", "V3 \u89C4\u8303\u5B57\u6BB5\uFF0C\u9152\u9986\u53EF\u7701\u7565\uFF1B\u5BFC\u51FA\u8865\u7A7A\u6570\u7EC4", true, "warning");
+        c.field(data, "group_only_greetings", [], root);
+      }
+    } else {
+      for (const key of V2_FIELDS) if (own(data, key)) c.field(data, key, "", root);
+      for (const key of ["alternate_greetings", "group_only_greetings", "tags"]) if (own(data, key)) c.field(data, key, [], root);
+      if (own(data, "extensions")) c.field(data, "extensions", {}, root);
+    }
+    if (own(data, "character_book")) {
+      if (!object(data.character_book)) c.issue(pathKey(root, "character_book"), "container", "character_book \u5FC5\u987B\u4E3A\u5BF9\u8C61\uFF1B\u4E0D\u4F1A\u81EA\u52A8\u5220\u9664\u4E16\u754C\u4E66");
+      else data.character_book = normalizeBook(data.character_book, "character", c, pathKey(root, "character_book"));
+    }
+    for (const key of ["nickname"]) if (own(data, key)) c.field(data, key, "", root);
+    if (own(data, "source")) c.field(data, "source", [], root);
+    if (own(data, "creator_notes_multilingual")) {
+      c.field(data, "creator_notes_multilingual", {}, root);
+      if (object(data.creator_notes_multilingual)) for (const key of Object.keys(data.creator_notes_multilingual)) c.field(data.creator_notes_multilingual, key, "", `${root}/creator_notes_multilingual`);
+    }
+    for (const key of ["creation_date", "modification_date"]) if (own(data, key)) c.field(data, key, 0, root);
+    if (own(data, "assets")) {
+      if (!Array.isArray(data.assets)) c.issue(pathKey(root, "assets"), "assets", "assets \u5FC5\u987B\u4E3A\u6570\u7EC4\uFF1B\u4E0D\u4F1A\u5220\u6539\u9644\u4EF6");
+      else data.assets.forEach((item, index) => {
+        const at = `${root}/assets/${index}`;
+        if (!object(item)) c.issue(at, "asset", "\u9644\u4EF6\u63CF\u8FF0\u5FC5\u987B\u4E3A\u5BF9\u8C61");
+        else for (const key of ["type", "uri", "name", "ext"]) if (typeof item[key] !== "string") c.issue(pathKey(at, key), "asset", "\u9644\u4EF6\u5B57\u6BB5\u5FC5\u987B\u4E3A\u5B57\u7B26\u4E32\uFF1B\u9700\u4EBA\u5DE5\u8865\u5145\uFF0C\u4E0D\u731C\u6D4B URI");
+      });
+    }
+    if (wrapped) {
+      for (const key of [...BASE_FIELDS, "tags"]) if (own(card, key) && own(data, key) && !equal(card[key], data[key])) {
+        c.issue(pathKey("", key), "legacy-mirror", "\u65E7\u7248\u955C\u50CF\u4E0E data \u4E0D\u540C\uFF0C\u4EE5 data \u4E3A\u51C6\u540C\u6B65", true, "warning");
+        c.set(card, key, data[key], "");
+      }
+    }
+    if (wrapped && own(card, "creatorcomment") && typeof data.creator_notes === "string" && card.creatorcomment !== data.creator_notes) {
+      c.issue("/creatorcomment", "legacy-mirror", "\u65E7\u7248\u521B\u4F5C\u8005\u5907\u6CE8\u4E0E data.creator_notes \u4E0D\u540C\uFF0C\u4EE5 data \u4E3A\u51C6\u540C\u6B65", true, "warning");
+      c.set(card, "creatorcomment", data.creator_notes, "");
+    }
+  } else c.issue("", "unsupported", "\u6B64\u68C0\u67E5\u5668\u4EC5\u652F\u6301\u89D2\u8272\u5361\u548C\u4E16\u754C\u4E66\uFF0C\u4E0D\u9A8C\u8BC1\u9884\u8BBE");
+  return { data: card, report: c.report() };
+}
+function checkAssetFormat(asset) {
+  return normalizeAssetFormat(asset).report;
+}
+function repairedAssetData(asset) {
+  const result = normalizeAssetFormat(asset);
+  const after = checkAssetFormat({ kind: asset.kind, data: result.data });
+  if (!result.report.repairable || !after.valid) {
+    const issues = result.report.issues.filter((v) => v.severity === "error" && !v.fixable);
+    throw new Error(`\u683C\u5F0F\u68C0\u67E5\u672A\u901A\u8FC7\uFF1A${(issues.length ? issues : after.issues).slice(0, 5).map((v) => `${v.path || "/"} ${v.message}`).join("\uFF1B")}\u3002\u8BF7\u7528 tavern_asset_validate / tavern_asset_repair \u68C0\u67E5\u4FEE\u590D`);
+  }
+  return result.data;
+}
+function convertWorldbook(input, target, source) {
+  const c = new Check();
+  const book = normalizeBook(input, target, c, "", source);
+  if (!c.report().repairable) throw new Error(c.issues.filter((v) => !v.fixable && v.severity === "error").map((v) => `${v.path} ${v.message}`).slice(0, 5).join("\uFF1B"));
+  return book;
+}
+function convertWorldbookEntry(input, target, id, source) {
+  const c = new Check();
+  const numeric = /^(0|[1-9]\d*)$/.test(id) ? Number(id) : id;
+  const entry = normalizeEntry(input, target, numeric, c, "", source);
+  if (!c.report().repairable) throw new Error(c.issues.filter((v) => !v.fixable && v.severity === "error").map((v) => `${v.path} ${v.message}`).slice(0, 5).join("\uFF1B"));
+  return entry;
+}
+
 // src/format.ts
 var REQUIRED_CHARACTER_FIELDS = ["name", "description", "personality", "scenario", "first_mes", "mes_example"];
 function isObject(value) {
@@ -1180,19 +1563,21 @@ function completeCharacterData(source) {
   return data;
 }
 function toCharacterV2(card) {
+  const normalized = repairedAssetData({ kind: "character", data: card });
   return {
-    ...clone(card),
+    ...normalized,
     spec: "chara_card_v2",
     spec_version: "2.0",
-    data: completeCharacterData(characterData(card))
+    data: completeCharacterData(characterData(normalized))
   };
 }
 function toCharacterV3(card) {
+  const normalized = repairedAssetData({ kind: "character", data: card });
   return {
-    ...clone(card),
+    ...normalized,
     spec: "chara_card_v3",
     spec_version: "3.0",
-    data: completeCharacterData(characterData(card))
+    data: completeCharacterData(characterData(normalized))
   };
 }
 function toCharacterV1(card) {
@@ -1404,6 +1789,7 @@ function convertEmbeddedUris(card, container) {
   return result;
 }
 function exportAsset(asset, requested) {
+  if (asset.kind !== "preset") asset = { ...asset, data: repairedAssetData(asset) };
   const stem = safeExportName(asset.name);
   if (asset.kind === "character") {
     if (requested === "v1") return jsonFile(`${stem}.v1.json`, toCharacterV1(asset.data));
@@ -1575,40 +1961,40 @@ function worldbookEntryRecords(asset) {
 }
 function mutableWorldbook(asset) {
   if (asset.kind === "worldbook") {
-    if (!isObject(asset.data.entries) && !Array.isArray(asset.data.entries)) asset.data.entries = {};
+    if (asset.data.entries === void 0) asset.data.entries = {};
+    if (!isObject(asset.data.entries) && !Array.isArray(asset.data.entries)) throw new Error("entries \u683C\u5F0F\u9519\u8BEF\uFF0C\u8BF7\u5148\u68C0\u67E5\u4FEE\u590D");
     return asset.data;
   }
   if (asset.kind !== "character") throw new Error("\u6240\u9009\u8D44\u6E90\u4E0D\u662F\u89D2\u8272\u5361\u6216\u4E16\u754C\u4E66");
   const data = characterData(asset.data);
-  if (!isObject(data.character_book)) data.character_book = { name: `${asset.name} \u4E16\u754C\u4E66`, entries: [] };
+  if (data.character_book === void 0) data.character_book = { name: `${asset.name} \u4E16\u754C\u4E66`, extensions: {}, entries: [] };
+  if (!isObject(data.character_book)) throw new Error("character_book \u683C\u5F0F\u9519\u8BEF\uFF0C\u8BF7\u5148\u68C0\u67E5\u4FEE\u590D");
   const book = data.character_book;
-  if (!isObject(book.entries) && !Array.isArray(book.entries)) book.entries = [];
+  if (book.entries === void 0) book.entries = [];
+  if (!isObject(book.entries) && !Array.isArray(book.entries)) throw new Error("entries \u683C\u5F0F\u9519\u8BEF\uFF0C\u8BF7\u5148\u68C0\u67E5\u4FEE\u590D");
   return book;
 }
 function nextEntryId(records) {
   const numeric = records.map((value) => Number(value.id)).filter((value) => Number.isSafeInteger(value) && value >= 0);
   return String((numeric.length ? Math.max(...numeric) : -1) + 1);
 }
-function setEntryIdentity(entry, id, arrayContainer) {
-  const numeric = Number(id);
-  const value = Number.isSafeInteger(numeric) && String(numeric) === id ? numeric : id;
-  if ("uid" in entry) entry.uid = value;
-  if (arrayContainer && ("id" in entry || !("uid" in entry))) entry.id = value;
-}
-function upsertWorldbookEntry(asset, requestedId, input) {
-  const book = mutableWorldbook(asset);
-  const records = worldbookEntryRecords(asset);
+function upsertWorldbookEntry(asset, requestedId, input, sourceDialect) {
+  const candidate = clone(asset);
+  const book = mutableWorldbook(candidate);
+  const records = worldbookEntryRecords(candidate);
   const entryId = requestedId || nextEntryId(records);
   const existing = records.find((value) => value.id === entryId);
-  const entry = clone(input);
+  const entry = convertWorldbookEntry(input, asset.kind === "character" ? "character" : "worldbook", entryId, sourceDialect);
   if (Array.isArray(book.entries)) {
-    setEntryIdentity(entry, entryId, true);
     if (existing?.index !== void 0) book.entries[existing.index] = entry;
     else book.entries.push(entry);
   } else {
-    setEntryIdentity(entry, entryId, false);
+    ;
     book.entries[entryId] = entry;
   }
+  if (candidate.kind === "character") characterData(candidate.data).character_book = convertWorldbook(book, "character");
+  else candidate.data = convertWorldbook(book, "worldbook");
+  asset.data = candidate.data;
   asset.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
   return { entryId, created: !existing };
 }
@@ -1641,7 +2027,7 @@ function copyWorldbookEntries(source, target, entryIds, conflict = "renumber") {
       continue;
     }
     const targetId = exists && conflict === "renumber" ? void 0 : sourceRecord.id;
-    const result = upsertWorldbookEntry(target, targetId, sourceRecord.entry);
+    const result = upsertWorldbookEntry(target, targetId, sourceRecord.entry, source.kind === "character" ? "character" : "worldbook");
     if (exists && conflict === "overwrite") overwritten += 1;
     else copied += 1;
     mappings.push({ sourceId: sourceRecord.id, targetId: result.entryId, status: exists && conflict === "overwrite" ? "overwritten" : "copied" });
@@ -2560,7 +2946,81 @@ function storeFor(workspacePath) {
   return new ProjectStore(resolveWorkspaceDataRoot(workspacePath || process.env.DSH_CWD || process.cwd()));
 }
 var workspaceParameter = { type: "string", description: "DSH \u5F53\u524D\u5DE5\u4F5C\u533A\u7EDD\u5BF9\u8DEF\u5F84\uFF1B\u9152\u9986\u9762\u677F\u53D1\u51FA\u7684\u4EFB\u52A1\u4F1A\u81EA\u52A8\u9644\u5E26" };
+function formatReportForAgent(report, offset = 0, limit = 50) {
+  const start = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
+  const size = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 50;
+  return toolResult({
+    ...report,
+    issues: report.issues.slice(start, start + size),
+    changes: report.changes.slice(start, start + size),
+    issueCount: report.issues.length,
+    changeCount: report.changes.length,
+    offset: start,
+    limit: size,
+    hasMore: start + size < Math.max(report.issues.length, report.changes.length)
+  });
+}
 function apply(ctx) {
+  ctx.tools.register(defineTool({
+    name: "tavern_asset_validate",
+    description: "\u53EA\u8BFB\u68C0\u67E5\u89D2\u8272\u5361 V1/V2/V3\u3001\u968F\u5361\u4E16\u754C\u4E66\u4E0E\u72EC\u7ACB\u4E16\u754C\u4E66\u7684\u5B57\u6BB5\u7C7B\u578B\u3001\u6761\u76EE\u5BB9\u5668/ID\u3001\u5173\u952E\u8BCD\u3001\u63D2\u5165\u4F4D\u7F6E\u3001\u9644\u4EF6\u63CF\u8FF0\u53CA\u65E7\u7248\u955C\u50CF\u3002\u521B\u4F5C\u5B8C\u6210\u6216\u5BFC\u51FA\u524D\u8C03\u7528\uFF1B\u53EA\u8FD4\u56DE\u95EE\u9898\u8DEF\u5F84\u548C\u4FEE\u590D\u6458\u8981\uFF0C\u4E0D\u8FD4\u56DE\u6B63\u6587\u6216\u4E8C\u8FDB\u5236\u3002valid \u8868\u793A\u5BFC\u5165\u5173\u952E\u7ED3\u6784\u65E0\u9519\u8BEF\uFF0C\u4E0D\u4EE3\u8868\u6240\u6709\u9152\u9986\u6269\u5C55\u90FD\u5DF2\u9A8C\u8BC1\u3002",
+    parameters: {
+      projectId: { type: "string", required: true },
+      assetId: { type: "string", required: true },
+      offset: { type: "number", description: "\u95EE\u9898/\u53D8\u66F4\u6458\u8981\u8D77\u59CB\u4E0B\u6807\uFF0C\u9ED8\u8BA4 0" },
+      limit: { type: "number", description: "\u8FD4\u56DE\u95EE\u9898/\u53D8\u66F4\u6570\uFF0C\u9ED8\u8BA4 50\uFF0C\u4E0A\u9650 100" },
+      workspacePath: workspaceParameter
+    },
+    output,
+    isConcurrencySafe: () => true,
+    async execute(args) {
+      const asset = findAsset(await storeFor(args.workspacePath).get(args.projectId), args.assetId);
+      return toolResult({ assetId: asset.id, kind: asset.kind, report: formatReportForAgent(checkAssetFormat(asset), args.offset, args.limit) });
+    }
+  }));
+  ctx.tools.register(defineTool({
+    name: "tavern_asset_repair",
+    description: "\u5B89\u5168\u4FEE\u590D\u89D2\u8272\u5361/\u4E16\u754C\u4E66\u683C\u5F0F\uFF1A\u8865\u9ED8\u8BA4\u503C\u3001\u660E\u786E\u7C7B\u578B\u8F6C\u6362\u3001entries \u5BF9\u8C61/\u6570\u7EC4\u4E0E\u5B57\u6BB5\u6620\u5C04\u3001\u540C\u6B65\u65E7\u7248\u955C\u50CF\u3002\u9ED8\u8BA4 dryRun=true \u4EC5\u9884\u89C8\uFF1B\u786E\u8BA4\u540E dryRun=false \u4FDD\u5B58\u3002\u4FDD\u7559\u672A\u77E5\u6269\u5C55\u548C\u9644\u4EF6\uFF1B\u6B63\u6587/\u9644\u4EF6\u7C7B\u578B\u9519\u8BEF\u3001\u91CD\u590D ID \u7B49\u4E0D\u80FD\u5B89\u5168\u5224\u65AD\u65F6\u62D2\u7EDD\u4FDD\u5B58\u5168\u90E8\u6539\u52A8\uFF0C\u5148\u7528\u73B0\u6709\u7F16\u8F91\u5DE5\u5177\u4FEE\u6B63\u518D\u68C0\u67E5\u3002\u7ED3\u679C\u4EC5\u542B\u8DEF\u5F84\uFF0C\u4E0D\u8F93\u51FA\u8D44\u6E90\u5168\u6587\u3002",
+    parameters: {
+      projectId: { type: "string", required: true },
+      assetId: { type: "string", required: true },
+      dryRun: { type: "boolean", description: "\u9ED8\u8BA4 true\uFF1Bfalse \u624D\u4FDD\u5B58\u901A\u8FC7\u6821\u9A8C\u7684\u4FEE\u590D\u7ED3\u679C" },
+      offset: { type: "number" },
+      limit: { type: "number", description: "\u9ED8\u8BA4 50\uFF0C\u4E0A\u9650 100" },
+      workspacePath: workspaceParameter
+    },
+    output,
+    isConcurrencySafe: (args) => args.dryRun !== false,
+    async execute(args) {
+      const store = storeFor(args.workspacePath);
+      const plan = (asset) => {
+        const normalized = normalizeAssetFormat(asset);
+        const after = checkAssetFormat({ ...asset, data: normalized.data });
+        return { ...normalized, after, canSave: normalized.report.repairable && after.valid };
+      };
+      let result = plan(findAsset(await store.get(args.projectId), args.assetId));
+      let saved = false;
+      if (args.dryRun === false && result.canSave && result.report.changes.length) {
+        await store.update(args.projectId, (project) => {
+          const asset = findAsset(project, args.assetId);
+          result = plan(asset);
+          if (!result.canSave) throw new Error("\u8D44\u6E90\u5DF2\u53D8\u5316\u4E14\u65E0\u6CD5\u5B89\u5168\u4FEE\u590D\uFF0C\u8BF7\u91CD\u65B0\u68C0\u67E5\u683C\u5F0F");
+          asset.data = result.data;
+          asset.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+          saved = true;
+        });
+      }
+      return toolResult({
+        assetId: args.assetId,
+        dryRun: args.dryRun !== false,
+        saved,
+        canSave: result.canSave,
+        before: formatReportForAgent(result.report, args.offset, args.limit),
+        after: formatReportForAgent(result.after, args.offset, args.limit),
+        next: !result.canSave ? "\u4E0D\u80FD\u5B89\u5168\u81EA\u52A8\u4FEE\u590D\uFF0C\u672A\u4FDD\u5B58\u3002\u6309\u95EE\u9898\u8DEF\u5F84\u4F7F\u7528 tavern_character_patch\u3001tavern_worldbook_entry_upsert \u6216 tavern_asset_save \u4FEE\u6B63\u540E\u91CD\u65B0\u68C0\u67E5\u3002" : saved ? "\u5DF2\u4FDD\u5B58\u5B89\u5168\u4FEE\u590D\uFF1B\u53EF\u6309\u9700\u8BFB\u53D6\u5B57\u6BB5\u6216\u5BFC\u51FA\u3002" : args.dryRun === false ? "\u683C\u5F0F\u5DF2\u7B26\u5408\u8981\u6C42\uFF0C\u65E0\u9700\u4FDD\u5B58\u3002" : "\u8FD9\u662F\u9884\u89C8\uFF1B\u4F7F\u7528 dryRun=false \u4FDD\u5B58\uFF0C\u6216\u7EE7\u7EED\u7F16\u8F91\u540E\u91CD\u65B0\u68C0\u67E5\u3002"
+      });
+    }
+  }));
   ctx.tools.register(defineTool({
     name: "tavern_project_list",
     description: "\u5217\u51FA\u9152\u9986\u521B\u4F5C\u6A21\u5F0F\u4E2D\u7684\u9879\u76EE\u53CA\u89D2\u8272\u5361\u3001\u4E16\u754C\u4E66\u3001\u9884\u8BBE\u6570\u91CF\u3002",
@@ -2638,7 +3098,7 @@ function apply(ctx) {
   }));
   ctx.tools.register(defineTool({
     name: "tavern_asset_save",
-    description: "\u4FDD\u5B58\u89D2\u8272\u5361\u3001\u4E16\u754C\u4E66\u6216\u9884\u8BBE\u7684\u5B8C\u6574\u539F\u751F JSON\uFF1B\u672A\u77E5\u5B57\u6BB5\u4F1A\u4FDD\u7559\u3002",
+    description: "\u4FDD\u5B58\u89D2\u8272\u5361\u3001\u4E16\u754C\u4E66\u6216\u9884\u8BBE\u7684\u5B8C\u6574\u539F\u751F JSON\uFF1B\u9700\u643A\u5E26\u539F\u6709\u672A\u77E5\u5B57\u6BB5\u3002\u5B8C\u6210\u521B\u4F5C\u540E\u7528 tavern_asset_validate \u68C0\u67E5\u683C\u5F0F\uFF0C\u518D\u7528 tavern_asset_repair \u9884\u89C8\u5E76\u4FEE\u590D\u5B89\u5168\u9ED8\u8BA4\u503C\u3002",
     parameters: {
       projectId: { type: "string", required: true },
       assetId: { type: "string", required: true },
@@ -2731,7 +3191,7 @@ function apply(ctx) {
   }));
   ctx.tools.register(defineTool({
     name: "tavern_worldbook_entry_upsert",
-    description: "\u5728\u72EC\u7ACB\u4E16\u754C\u4E66\u6216\u89D2\u8272\u5361\u5185\u5D4C\u4E16\u754C\u4E66\u4E2D\u65B0\u589E\u6216\u8986\u76D6\u4E00\u4E2A\u539F\u751F\u6761\u76EE\uFF0C\u4FDD\u6301\u5176\u4F59\u6761\u76EE\u548C\u672A\u77E5\u5B57\u6BB5\u4E0D\u53D8\u3002",
+    description: "\u5728\u72EC\u7ACB\u4E16\u754C\u4E66\u6216\u89D2\u8272\u5361\u5185\u5D4C\u4E16\u754C\u4E66\u4E2D\u65B0\u589E\u6216\u8986\u76D6\u4E00\u4E2A\u539F\u751F\u6761\u76EE\uFF0C\u81EA\u52A8\u6309\u76EE\u6807\u8F6C\u6362\u5B57\u6BB5\u5E76\u8865\u9ED8\u8BA4\u503C\uFF1A\u72EC\u7ACB\u4E66 uid/key/order/disable\uFF1B\u5361\u5185 id/keys/insertion_order/enabled \u548C extensions\u3002\u5176\u4F59\u6761\u76EE\u4E0D\u53D8\uFF1B\u8986\u76D6\u65F6\u643A\u5E26\u9700\u4FDD\u7559\u7684\u539F\u6761\u76EE\u6269\u5C55\u3002",
     parameters: {
       projectId: { type: "string", required: true },
       assetId: { type: "string", required: true, description: "\u72EC\u7ACB\u4E16\u754C\u4E66\u6216\u89D2\u8272\u5361 ID" },

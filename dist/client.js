@@ -21,13 +21,303 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // src/client.tsx
 var client_exports = {};
 __export(client_exports, {
+  AuthoringModeControl: () => AuthoringModeControl,
   apply: () => apply,
+  editEmbeddedBook: () => editEmbeddedBook,
+  embeddedBookAsset: () => embeddedBookAsset,
   includesKeyword: () => includesKeyword,
   inject: () => inject,
   inspectLoreEntries: () => inspectLoreEntries
 });
 module.exports = __toCommonJS(client_exports);
 var import_react = require("react");
+
+// src/resource-format.ts
+var object = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+var own = (v, key) => Object.hasOwn(v, key);
+var pathKey = (path, key) => `${path}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`;
+var equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+var integerId = (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+var WORLD_ENTRY_DEFAULTS = {
+  key: [],
+  keysecondary: [],
+  comment: "",
+  content: "",
+  constant: false,
+  vectorized: false,
+  selective: true,
+  selectiveLogic: 0,
+  addMemo: true,
+  order: 100,
+  position: 0,
+  disable: false,
+  ignoreBudget: false,
+  excludeRecursion: false,
+  preventRecursion: false,
+  matchPersonaDescription: false,
+  matchCharacterDescription: false,
+  matchCharacterPersonality: false,
+  matchCharacterDepthPrompt: false,
+  matchScenario: false,
+  matchCreatorNotes: false,
+  delayUntilRecursion: false,
+  probability: 100,
+  useProbability: true,
+  depth: 4,
+  outletName: "",
+  group: "",
+  groupOverride: false,
+  groupWeight: 100,
+  scanDepth: null,
+  caseSensitive: null,
+  matchWholeWords: null,
+  useGroupScoring: null,
+  automationId: "",
+  role: null,
+  sticky: 0,
+  cooldown: 0,
+  delay: 0,
+  triggers: [],
+  displayIndex: 0,
+  characterFilter: { isExclude: false, names: [], tags: [] }
+};
+var EXTENSIONS = {
+  position: "position",
+  excludeRecursion: "exclude_recursion",
+  preventRecursion: "prevent_recursion",
+  displayIndex: "display_index",
+  probability: "probability",
+  useProbability: "useProbability",
+  depth: "depth",
+  selectiveLogic: "selectiveLogic",
+  outletName: "outlet_name",
+  group: "group",
+  groupOverride: "group_override",
+  groupWeight: "group_weight",
+  delayUntilRecursion: "delay_until_recursion",
+  scanDepth: "scan_depth",
+  matchWholeWords: "match_whole_words",
+  useGroupScoring: "use_group_scoring",
+  caseSensitive: "case_sensitive",
+  automationId: "automation_id",
+  role: "role",
+  vectorized: "vectorized",
+  sticky: "sticky",
+  cooldown: "cooldown",
+  delay: "delay",
+  matchPersonaDescription: "match_persona_description",
+  matchCharacterDescription: "match_character_description",
+  matchCharacterPersonality: "match_character_personality",
+  matchCharacterDepthPrompt: "match_character_depth_prompt",
+  matchScenario: "match_scenario",
+  matchCreatorNotes: "match_creator_notes",
+  triggers: "triggers",
+  ignoreBudget: "ignore_budget"
+};
+var CORE = { uid: "id", key: "keys", keysecondary: "secondary_keys", order: "insertion_order", characterFilter: "character_filter" };
+var Check = class {
+  issues = [];
+  changes = [];
+  issue(path, code, message, fixable = false, severity = "error") {
+    this.issues.push({ path, code, message, fixable, severity });
+  }
+  set(obj, key, value, path) {
+    if (!own(obj, key) || !equal(obj[key], value)) {
+      obj[key] = structuredClone(value);
+      this.changes.push(pathKey(path, key));
+    }
+  }
+  field(obj, key, fallback, path, required = false, nullable = false) {
+    const at = pathKey(path, key);
+    if (!own(obj, key)) {
+      if (required) this.issue(at, "missing", "\u7F3A\u5C11\u5FC5\u586B\u5B57\u6BB5\uFF0C\u53EF\u8865\u9ED8\u8BA4\u503C", true);
+      this.set(obj, key, fallback, path);
+      return;
+    }
+    const v = obj[key];
+    if (v === null && nullable) return;
+    let next = v;
+    if (typeof fallback === "boolean") {
+      if (v === "true" || v === 1) next = true;
+      if (v === "false" || v === 0) next = false;
+    } else if (typeof fallback === "number" && typeof v === "string" && v.trim() && Number.isFinite(Number(v))) next = Number(v);
+    else if (Array.isArray(fallback) && typeof v === "string") next = v ? [v] : [];
+    const valid = Array.isArray(fallback) ? Array.isArray(next) && next.every((item) => typeof item === "string") : object(fallback) ? object(next) : typeof next === typeof fallback && (typeof next !== "number" || Number.isFinite(next));
+    if (!valid) {
+      this.issue(at, "type", "\u5B57\u6BB5\u7C7B\u578B\u9519\u8BEF\uFF1B\u4E0D\u80FD\u5B89\u5168\u8F6C\u6362\uFF0C\u9700\u624B\u52A8\u4FEE\u6B63");
+      return;
+    }
+    if (!equal(v, next)) {
+      this.issue(at, "type", "\u53EF\u65E0\u6B67\u4E49\u8F6C\u6362\u5B57\u6BB5\u7C7B\u578B", true);
+      this.set(obj, key, next, path);
+    }
+  }
+  report() {
+    const errorCount = this.issues.filter((v) => v.severity === "error").length;
+    return {
+      valid: errorCount === 0,
+      repairable: !this.issues.some((v) => v.severity === "error" && !v.fixable),
+      errorCount,
+      warningCount: this.issues.length - errorCount,
+      issues: this.issues,
+      changes: [...new Set(this.changes)]
+    };
+  }
+};
+function dialect(entry) {
+  return own(entry, "keys") || own(entry, "enabled") || own(entry, "insertion_order") || typeof entry.position === "string" ? "character" : "worldbook";
+}
+function translate(entry, target, source, c, path) {
+  if (source === target) return;
+  const ext = object(entry.extensions) ? entry.extensions : {};
+  const move = (from, to) => {
+    if (own(entry, from)) {
+      entry[to] = entry[from];
+      delete entry[from];
+    }
+  };
+  if (target === "character") {
+    for (const [native, embedded] of Object.entries(CORE)) move(native, embedded);
+    if (own(entry, "disable")) {
+      c.field(entry, "disable", false, path);
+      if (typeof entry.disable === "boolean") {
+        entry.enabled = !entry.disable;
+        delete entry.disable;
+      }
+    }
+    for (const [native, embedded] of Object.entries(EXTENSIONS)) {
+      if (own(entry, native)) {
+        ext[embedded] = entry[native];
+        if (native !== "position") delete entry[native];
+      }
+    }
+    if (typeof entry.position === "number") entry.position = entry.position === 0 ? "before_char" : "after_char";
+    if (!own(entry, "use_regex")) entry.use_regex = true;
+    if (!own(entry, "extensions") || object(entry.extensions)) entry.extensions = ext;
+  } else {
+    for (const [native, embedded] of Object.entries(CORE)) move(embedded, native);
+    if (own(entry, "enabled")) {
+      c.field(entry, "enabled", true, path);
+      if (typeof entry.enabled === "boolean") {
+        entry.disable = !entry.enabled;
+        delete entry.enabled;
+      }
+    }
+    const position = entry.position;
+    for (const [native, embedded] of Object.entries(EXTENSIONS)) if (own(ext, embedded)) entry[native] = structuredClone(ext[embedded]);
+    if (!own(ext, "position")) entry.position = position === "before_char" ? 0 : position === "after_char" ? 1 : position ?? 0;
+    if (!own(entry, "caseSensitive") && typeof entry.case_sensitive === "boolean") entry.caseSensitive = entry.case_sensitive;
+  }
+  c.changes.push(path);
+}
+function normalizeEntry(input, target, id, c, path, source = dialect(input)) {
+  const entry = structuredClone(input);
+  if (own(entry, "extensions") && !object(entry.extensions)) c.issue(pathKey(path, "extensions"), "type", "extensions \u5FC5\u987B\u662F\u5BF9\u8C61\uFF0C\u4E0D\u80FD\u4E22\u5F03\u5DF2\u6709\u6269\u5C55");
+  translate(entry, target, source, c, path);
+  const idKey = target === "character" ? "id" : "uid";
+  c.set(entry, idKey, id, path);
+  c.field(entry, idKey, 0, path, true);
+  if (!integerId(entry[idKey])) c.issue(pathKey(path, idKey), "id", "\u6761\u76EE ID \u5FC5\u987B\u662F\u975E\u8D1F\u5B89\u5168\u6574\u6570");
+  if (target === "worldbook") {
+    for (const [key, value] of Object.entries(WORLD_ENTRY_DEFAULTS)) nativeField(entry, key, key === "displayIndex" && integerId(id) ? id : value, c, path);
+  } else {
+    for (const key of ["keys", "secondary_keys"]) c.field(entry, key, [], path, key === "keys");
+    c.field(entry, "content", "", path, true);
+    c.field(entry, "enabled", true, path, true);
+    c.field(entry, "insertion_order", 100, path, true);
+    c.field(entry, "extensions", {}, path, true);
+    c.field(entry, "use_regex", true, path);
+    c.field(entry, "comment", "", path);
+    c.field(entry, "constant", false, path);
+    c.field(entry, "selective", false, path);
+    if (!own(entry, "position")) c.set(entry, "position", "before_char", path);
+    if (!["before_char", "after_char"].includes(String(entry.position))) c.issue(pathKey(path, "position"), "position", "\u5361\u5185 position \u5E94\u4E3A before_char \u6216 after_char\uFF1B\u9AD8\u7EA7\u4F4D\u7F6E\u5B58\u5165 extensions.position");
+    if (object(entry.extensions)) {
+      for (const [native, embedded] of Object.entries(EXTENSIONS)) {
+        const fallback = native === "position" ? entry.position === "before_char" ? 0 : 1 : native === "caseSensitive" && typeof entry.case_sensitive === "boolean" ? entry.case_sensitive : native === "displayIndex" && integerId(id) ? id : WORLD_ENTRY_DEFAULTS[native];
+        nativeField(entry.extensions, native, fallback, c, pathKey(path, "extensions"), embedded);
+      }
+    }
+    if (own(entry, "case_sensitive")) c.field(entry, "case_sensitive", false, path);
+    if (own(entry, "name")) c.field(entry, "name", "", path);
+    if (own(entry, "priority")) c.field(entry, "priority", 0, path);
+  }
+  return entry;
+}
+function nativeField(entry, native, fallback, c, path, key = native) {
+  if (native === "delayUntilRecursion" && integerId(entry[key])) return;
+  const nullableBool = ["caseSensitive", "matchWholeWords", "useGroupScoring"].includes(native);
+  const nullableNumber = ["scanDepth", "role", "sticky", "cooldown", "delay"].includes(native);
+  if (fallback === null && !own(entry, key)) c.set(entry, key, null, path);
+  const effective = fallback === null ? nullableBool ? false : 0 : fallback;
+  c.field(entry, key, effective, path, ["key", "content", "order", "disable"].includes(native), nullableBool || nullableNumber);
+  const v = entry[key];
+  if (typeof v === "number") {
+    if (native === "position" && (!Number.isInteger(v) || v < 0 || v > 7)) c.issue(pathKey(path, key), "range", "\u9152\u9986\u63D2\u5165\u4F4D\u7F6E\u5FC5\u987B\u4E3A 0\u20137 \u7684\u6574\u6570");
+    if (native === "selectiveLogic" && ![0, 1, 2, 3].includes(v)) c.issue(pathKey(path, key), "range", "\u5173\u952E\u8BCD\u903B\u8F91\u5FC5\u987B\u4E3A 0\u20133");
+    if (native === "probability" && (v < 0 || v > 100)) c.issue(pathKey(path, key), "range", "\u6982\u7387\u5FC5\u987B\u5728 0\u2013100 \u4E4B\u95F4");
+    if (native === "role" && ![0, 1, 2].includes(v)) c.issue(pathKey(path, key), "range", "\u89D2\u8272\u5FC5\u987B\u4E3A null \u6216 0/1/2");
+    if (["depth", "scanDepth", "sticky", "cooldown", "delay"].includes(native) && (!Number.isInteger(v) || v < 0)) c.issue(pathKey(path, key), "range", "\u6DF1\u5EA6/\u8BA1\u65F6\u503C\u5FC5\u987B\u4E3A\u975E\u8D1F\u6574\u6570\u6216\u5141\u8BB8\u7684 null");
+  }
+  if (native === "characterFilter" && object(v)) {
+    c.field(v, "isExclude", false, pathKey(path, key));
+    c.field(v, "names", [], pathKey(path, key));
+    c.field(v, "tags", [], pathKey(path, key));
+  }
+}
+function normalizeBook(input, target, c, path, source) {
+  const book = structuredClone(input);
+  if (target === "character") {
+    if (!own(book, "extensions")) c.issue(pathKey(path, "extensions"), "spec-default", "CC \u89C4\u8303\u8981\u6C42\u4E66\u7EA7 extensions\uFF1B\u9152\u9986\u6837\u672C\u53EF\u7701\u7565\uFF0C\u5BFC\u51FA\u8865\u7A7A\u5BF9\u8C61", true, "warning");
+    c.field(book, "extensions", {}, path);
+    for (const key of ["name", "description"]) if (own(book, key)) c.field(book, key, "", path);
+    for (const key of ["scan_depth", "token_budget"]) if (own(book, key)) c.field(book, key, 0, path);
+    if (own(book, "recursive_scanning")) c.field(book, "recursive_scanning", false, path);
+  }
+  if (!own(book, "entries")) {
+    c.issue(pathKey(path, "entries"), "missing", "\u7F3A\u5C11 entries\uFF0C\u53EF\u521B\u5EFA\u7A7A\u6761\u76EE\u96C6\u5408", true);
+    c.set(book, "entries", target === "character" ? [] : {}, path);
+  }
+  const entries = book.entries;
+  if (!Array.isArray(entries) && !object(entries)) {
+    c.issue(pathKey(path, "entries"), "container", "entries \u5FC5\u987B\u4E3A\u6570\u7EC4\u6216\u5BF9\u8C61\uFF0C\u4E0D\u80FD\u4E22\u5F03\u73B0\u6709\u503C");
+    return book;
+  }
+  const array = Array.isArray(entries);
+  if (array !== (target === "character")) c.issue(pathKey(path, "entries"), "container", target === "character" ? "\u968F\u5361\u4E16\u754C\u4E66 entries \u5FC5\u987B\u662F\u6570\u7EC4" : "\u72EC\u7ACB\u4E16\u754C\u4E66 entries \u5FC5\u987B\u662F UID \u5BF9\u8C61", true);
+  const output = {};
+  const list = [];
+  const used = /* @__PURE__ */ new Set();
+  for (const [key, raw] of Object.entries(entries)) {
+    const at = pathKey(pathKey(path, "entries"), key);
+    if (!object(raw)) {
+      c.issue(at, "entry", "\u6761\u76EE\u5FC5\u987B\u4E3A\u5BF9\u8C61\uFF0C\u4E0D\u80FD\u4E22\u5F03\u8BE5\u6761\u76EE");
+      list.push(raw);
+      output[key] = raw;
+      continue;
+    }
+    const from = source ?? (!array && ["key", "order", "disable"].some((field2) => own(raw, field2)) ? "worldbook" : dialect(raw));
+    const identity = array ? raw.id ?? raw.uid ?? Number(key) : /^(0|[1-9]\d*)$/.test(key) ? Number(key) : key;
+    const id = typeof identity === "string" && /^(0|[1-9]\d*)$/.test(identity) ? Number(identity) : identity;
+    if (used.has(String(id))) c.issue(at, "duplicate-id", "\u91CD\u590D\u6761\u76EE ID\uFF0C\u9700\u8981\u660E\u786E\u5206\u914D\u65B0 ID\uFF0C\u4E0D\u80FD\u8986\u76D6\u5176\u4ED6\u6761\u76EE");
+    used.add(String(id));
+    const normalized = normalizeEntry(raw, target, id, c, at, from);
+    if (!equal(raw, normalized)) c.changes.push(at);
+    list.push(normalized);
+    output[String(id)] = normalized;
+  }
+  if (array !== (target === "character")) c.changes.push(pathKey(path, "entries"));
+  book.entries = target === "character" ? list : output;
+  return book;
+}
+function convertWorldbook(input, target, source) {
+  const c = new Check();
+  const book = normalizeBook(input, target, c, "", source);
+  if (!c.report().repairable) throw new Error(c.issues.filter((v) => !v.fixable && v.severity === "error").map((v) => `${v.path} ${v.message}`).slice(0, 5).join("\uFF1B"));
+  return book;
+}
+
+// src/client.tsx
 var import_jsx_runtime = require("react/jsx-runtime");
 var API = "/api/dsh-stcardwriter";
 var listeners = /* @__PURE__ */ new Set();
@@ -95,7 +385,18 @@ function embeddedBookAsset(asset) {
   if (asset.kind !== "character") return void 0;
   const book = innerCharacter(asset).character_book;
   if (!book || typeof book !== "object" || Array.isArray(book)) return void 0;
-  return { ...asset, kind: "worldbook", format: "worldbook", name: typeof book.name === "string" && book.name ? book.name : `${asset.name} \u4E16\u754C\u4E66`, data: book };
+  let view = book;
+  try {
+    view = convertWorldbook(book, "worldbook");
+  } catch {
+  }
+  return { ...asset, kind: "worldbook", format: "worldbook", name: typeof book.name === "string" && book.name ? book.name : `${asset.name} \u4E16\u754C\u4E66`, data: view };
+}
+function editEmbeddedBook(asset, mutate) {
+  const nested = embeddedBookAsset(asset);
+  if (!nested) throw new Error("\u89D2\u8272\u5361\u6CA1\u6709\u5185\u5D4C\u4E16\u754C\u4E66");
+  mutate(nested);
+  innerCharacter(asset).character_book = convertWorldbook(nested.data, "character", "worldbook");
 }
 function TextField(props) {
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { className: "stcw-field", children: [
@@ -129,28 +430,7 @@ function CharacterEditor({ asset, change }) {
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { label: "\u521B\u4F5C\u8005\u5907\u6CE8", multiline: true, value: field(data, "creator_notes"), onChange: (value) => set("creator_notes", value) })
   ] });
 }
-var ENTRY_DEFAULTS = {
-  key: [],
-  keysecondary: [],
-  comment: "",
-  content: "",
-  constant: false,
-  vectorized: false,
-  selective: true,
-  selectiveLogic: 0,
-  order: 100,
-  position: 0,
-  disable: false,
-  ignoreBudget: false,
-  excludeRecursion: false,
-  preventRecursion: false,
-  probability: 100,
-  useProbability: true,
-  depth: 4,
-  group: "",
-  groupOverride: false,
-  groupWeight: 100
-};
+var ENTRY_DEFAULTS = WORLD_ENTRY_DEFAULTS;
 function worldEntries(asset) {
   const current = asset.data.entries;
   if (current && !Array.isArray(current) && typeof current === "object") return current;
@@ -181,7 +461,7 @@ function WorldbookEditor({ asset, change, selected, onSelect }) {
     change((next) => {
       const all = worldEntries(next);
       next.data.entries = all;
-      all[id] = { ...ENTRY_DEFAULTS, uid: Number(id) };
+      all[id] = { ...structuredClone(ENTRY_DEFAULTS), uid: Number(id), displayIndex: Number(id) };
     });
     pick(id);
   };
@@ -241,7 +521,7 @@ function EmbeddedWorldbookEditor({ asset, change, selected, onSelect }) {
   const data = innerCharacter(asset);
   const book = data.character_book && typeof data.character_book === "object" && !Array.isArray(data.character_book) ? data.character_book : void 0;
   const create = () => change((next) => {
-    innerCharacter(next).character_book = { name: `${next.name} \u4E16\u754C\u4E66`, description: "", entries: [] };
+    innerCharacter(next).character_book = { name: `${next.name} \u4E16\u754C\u4E66`, description: "", extensions: {}, entries: [] };
   });
   const remove = () => {
     if (confirm("\u79FB\u9664\u8FD9\u5F20\u89D2\u8272\u5361\u7684\u5185\u5D4C\u4E16\u754C\u4E66\uFF1F\u5176\u4ED6\u9644\u5C5E\u8D44\u6E90\u4E0D\u4F1A\u53D7\u5F71\u54CD\u3002")) change((next) => {
@@ -254,12 +534,7 @@ function EmbeddedWorldbookEditor({ asset, change, selected, onSelect }) {
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: create, children: "\uFF0B \u65B0\u5EFA\u5185\u5D4C\u4E16\u754C\u4E66" })
   ] });
   const bookAsset = embeddedBookAsset(asset);
-  const changeBook = (mutate) => change((next) => {
-    const inner = innerCharacter(next);
-    const nested = { ...next, kind: "worldbook", format: "worldbook", data: inner.character_book };
-    mutate(nested);
-    inner.character_book = nested.data;
-  });
+  const changeBook = (mutate) => change((next) => editEmbeddedBook(next, mutate));
   const rename = (value) => change((next) => {
     const embedded = innerCharacter(next).character_book;
     if (embedded && typeof embedded === "object" && !Array.isArray(embedded)) embedded.name = value;
@@ -942,8 +1217,77 @@ function ConnectorPanel({ project, accept, notice }) {
     ] })
   ] });
 }
+function AuthoringModeControl({ sessionId }) {
+  const [status, setStatus] = (0, import_react.useState)(null);
+  const [error, setError] = (0, import_react.useState)("");
+  const [switchError, setSwitchError] = (0, import_react.useState)("");
+  const [saving, setSaving] = (0, import_react.useState)(false);
+  const mutation = (0, import_react.useRef)(null);
+  (0, import_react.useEffect)(() => () => mutation.current?.abort(), []);
+  (0, import_react.useEffect)(() => {
+    if (!sessionId || saving) return;
+    const controller = new AbortController();
+    let pending = false;
+    const refresh = async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        const next = await api(`/sessions/${encodeURIComponent(sessionId)}/mode`, { signal: controller.signal });
+        if (!controller.signal.aborted) {
+          setStatus(next);
+          setError("");
+        }
+      } catch (reason) {
+        if (!controller.signal.aborted) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+          setStatus(null);
+        }
+      } finally {
+        pending = false;
+      }
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), 2e3);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, [sessionId, saving]);
+  const change = async (mode) => {
+    if (!sessionId || !status?.canSwitch || saving) return;
+    const controller = new AbortController();
+    mutation.current = controller;
+    setSaving(true);
+    setSwitchError("");
+    try {
+      const next = await api(`/sessions/${encodeURIComponent(sessionId)}/mode`, {
+        method: "PUT",
+        body: JSON.stringify({ mode }),
+        signal: controller.signal
+      });
+      if (!controller.signal.aborted) setStatus(next);
+    } catch (reason) {
+      if (!controller.signal.aborted) setSwitchError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      if (!controller.signal.aborted) setSaving(false);
+    }
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "stcw-session-mode", "aria-label": "\u5F53\u524D\u5BF9\u8BDD\u5DE5\u5177\u6A21\u5F0F", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+      "\u5DE5\u5177\u6A21\u5F0F ",
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", { "aria-label": "\u5DE5\u5177\u6A21\u5F0F", value: status?.mode ?? "", disabled: !status?.canSwitch || saving, onChange: (event) => void change(event.target.value), children: [
+        !status && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "", children: sessionId ? "\u7B49\u5F85\u4F1A\u8BDD\u72B6\u6001" : "\u8BF7\u5148\u9009\u62E9\u5BF9\u8BDD" }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "standard", children: "\u6807\u51C6\u6A21\u5F0F" }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "minimal", children: "\u6781\u7B80\u6A21\u5F0F" })
+      ] })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "stcw-hint", role: "status", children: saving ? "\u6B63\u5728\u5207\u6362\u2026" : switchError || error || (!sessionId ? "\u8BF7\u6253\u5F00\u9152\u9986\u521B\u4F5C\u6A21\u5F0F\u7684\u5BF9\u8BDD\u3002" : status ? `${status.toolCount} \u4E2A\u53EF\u7528\u5DE5\u5177 \xB7 ${status.canSwitch ? "\u4EC5\u5F71\u54CD\u5F53\u524D\u5BF9\u8BDD\uFF0C\u4FDD\u7559\u804A\u5929\u8BB0\u5F55" : "\u6B63\u5728\u56DE\u590D\uFF0C\u8BF7\u7ED3\u675F\u540E\u518D\u5207\u6362"}` : "\u6B63\u5728\u8BFB\u53D6\u2026") }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: "\u6781\u7B80\u4FDD\u7559\u9152\u9986\u5DE5\u5177\u3001\u63D0\u95EE\u4E0E\u9000\u51FA\u8BA1\u5212\uFF1B\u6807\u51C6\u6062\u590D\u901A\u7528\u5DE5\u5177\u3002Preset Plus \u5728\u4E24\u79CD\u6A21\u5F0F\u4E0B\u5747\u751F\u6548\u3002" })
+  ] });
+}
 function Workbench(props) {
   const isOpen = (0, import_react.useSyncExternalStore)(subscribe, () => opened);
+  const currentSessionId = props.useSessions((state) => state.current);
   const currentWorkspace = props.useSessions((state) => state.current ? state.byId[state.current]?.cwd : void 0);
   const recentWorkspace = props.useWorkspaces((state) => state.items.find((item) => item.workspaceId === state.recentWorkspaceId)?.path);
   const workspacePath = currentWorkspace || recentWorkspace || "";
@@ -1029,12 +1373,7 @@ function Workbench(props) {
       changeAsset(mutate);
       return;
     }
-    changeAsset((next) => {
-      const inner = innerCharacter(next);
-      const nested = { ...next, kind: "worldbook", format: "worldbook", data: inner.character_book };
-      mutate(nested);
-      inner.character_book = nested.data;
-    });
+    changeAsset((next) => editEmbeddedBook(next, mutate));
   };
   const lore = loreBook ? {
     book: loreBook,
@@ -1115,6 +1454,7 @@ function Workbench(props) {
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "stcw-close", onClick: () => setOpened(false), children: "\xD7" })
     ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AuthoringModeControl, { sessionId: currentSessionId }, currentSessionId || "no-session"),
     !project ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", { className: "stcw-welcome", children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "\u4ECE\u7A7A\u9879\u76EE\u5F00\u59CB" }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "\u53EF\u6279\u91CF\u5BFC\u5165\u89D2\u8272\u5361\u3001\u4E16\u754C\u4E66\u548C\u9884\u8BBE\uFF0C\u4E5F\u53EF\u4EE5\u9010\u9879\u65B0\u5EFA\u3002" }),
@@ -1192,6 +1532,7 @@ function Workbench(props) {
   ] }) });
 }
 var CSS = `
+.stcw-session-mode{padding:9px 14px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;border-bottom:1px solid #302a3a;background:#1a1622}.stcw-session-mode label{display:flex;align-items:center;gap:8px}.stcw-session-mode small{width:100%;color:#a795b7}.stcw-session-mode select:disabled{opacity:.6;cursor:not-allowed}
 .stcw-sidebar-button{border:0;background:transparent;color:inherit;display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;white-space:nowrap}.stcw-sidebar-button:hover{background:color-mix(in srgb,currentColor 10%,transparent)}
 .stcw-layer{position:fixed;inset:0;z-index:10000;background:rgba(8,7,12,.7);backdrop-filter:blur(8px);pointer-events:auto;padding:20px;color:#eee;font:14px/1.45 Inter,system-ui,sans-serif}.stcw-workbench{height:100%;display:flex;flex-direction:column;background:#15121d;border:1px solid #3a3347;border-radius:16px;box-shadow:0 24px 80px #0009;overflow:hidden}.stcw-workbench header{height:58px;padding:0 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #302a3a;background:#1c1825}.stcw-workbench header>div{display:flex;align-items:center;gap:12px}.stcw-workbench button,.stcw-button,.stcw-file{border:1px solid #51475f;background:#282232;color:#eee;padding:7px 10px;border-radius:7px;cursor:pointer;text-decoration:none}.stcw-workbench button:hover,.stcw-button:hover,.stcw-file:hover{background:#373043}.stcw-button.disabled{opacity:.45;cursor:not-allowed;pointer-events:none}.stcw-workbench button.danger{border-color:#7a3f4b;color:#ffabb8}.stcw-close{font-size:24px!important;line-height:1;padding:5px 10px!important}.stcw-workbench select,.stcw-workbench input,.stcw-workbench textarea{background:#100e16;color:#eee;border:1px solid #463d52;border-radius:6px;padding:8px;box-sizing:border-box}.stcw-file input{display:none}.stcw-toolbar{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid #302a3a;overflow-x:auto}.stcw-project-name{font-weight:700;width:220px;flex:0 0 auto}.stcw-notice{color:#b9a7cf;margin-left:auto;white-space:nowrap}.stcw-columns{display:grid;grid-template-columns:230px minmax(420px,1fr) 360px;min-height:0;flex:1}.stcw-assets,.stcw-editor,.stcw-preview{min-height:0;overflow:auto}.stcw-assets{padding:9px;border-right:1px solid #302a3a}.stcw-assets>button{display:grid;width:100%;text-align:left;margin-bottom:7px;grid-template-columns:auto 1fr;gap:2px 8px}.stcw-assets>button>span{grid-row:1/3;background:#493c5b;color:#d8c8ec;font-size:11px;padding:3px 5px;border-radius:4px;align-self:center}.stcw-assets small,.stcw-entry-list small{color:#9d91a9}.stcw-assets .active,.stcw-entry-list .active{border-color:#9b75ce;background:#392c4a}.stcw-editor{padding:14px}.stcw-editor-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:14px;position:sticky;top:-14px;background:#15121ded;padding:10px 0;z-index:2}.stcw-editor-head>div{display:flex;gap:7px;align-items:center}.stcw-editor-head input{font-size:18px;font-weight:700}.stcw-form{display:flex;flex-direction:column;gap:10px}.stcw-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.stcw-field{display:flex;flex-direction:column;gap:5px}.stcw-field>span{color:#bcaec9;font-size:12px}.stcw-field textarea{width:100%;resize:vertical}.stcw-world-editor{display:grid;grid-template-columns:180px 1fr;gap:12px}.stcw-entry-list{display:flex;flex-direction:column;gap:6px;max-height:68vh;overflow:auto}.stcw-entry-list>button{display:flex;flex-direction:column;text-align:left}.stcw-entry-form{display:flex;flex-direction:column;gap:10px}.stcw-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.stcw-checks{display:flex;gap:14px;flex-wrap:wrap}.stcw-checks label{display:flex;align-items:center;gap:5px}.stcw-raw{margin-top:18px;border-top:1px solid #342d3e;padding-top:12px}.stcw-raw summary{cursor:pointer;color:#bda5d8}.stcw-raw textarea{width:100%;font:12px/1.45 ui-monospace,monospace;margin-top:8px}.stcw-preview{border-left:1px solid #302a3a;background:#100e16;padding:15px}.stcw-preview-title{text-transform:uppercase;letter-spacing:.14em;font-size:11px;color:#a28eaf;margin-bottom:12px}.stcw-preview pre{white-space:pre-wrap;word-break:break-word;font:13px/1.55 inherit}.stcw-avatar{width:72px;height:72px;border-radius:50%;display:grid;place-items:center;margin:10px auto;background:linear-gradient(135deg,#9a67cc,#4d78bd);font-size:30px}.stcw-preview-card h2{text-align:center}.stcw-tags{display:flex;justify-content:center;flex-wrap:wrap;gap:5px}.stcw-tags span{background:#332740;padding:3px 7px;border-radius:20px;font-size:11px}.stcw-lore-hit,.stcw-prompt{border:1px solid #3b3247;border-radius:8px;padding:10px;margin:9px 0;background:#191520}.stcw-lore-hit small{display:block;color:#a795b7}.stcw-prompt>div{display:flex;justify-content:space-between}.stcw-prompt span{color:#a795b7}.stcw-preview-note,.stcw-hint{color:#a99ab7;font-size:12px}.stcw-empty,.stcw-welcome{display:grid;place-content:center;text-align:center;color:#9f93aa;min-height:180px}.stcw-welcome{flex:1}.stcw-welcome button{justify-self:center}@media(max-width:1050px){.stcw-columns{grid-template-columns:180px minmax(380px,1fr) 300px}}`;
 var EXTRA_CSS = `

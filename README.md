@@ -3,11 +3,11 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-4b8f77.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-runtime-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 
-在 DeepSeek Harness 中创作、整理、预览和迁移 SillyTavern 角色卡、世界书与预设。当前插件版本：`0.5.2-alpha.2`；npm 包名：`dsh-stcardwriter`，目前尚未发布到 npm。
+在 DeepSeek Harness 中创作、整理、预览和迁移 SillyTavern 角色卡、世界书与预设。当前插件版本：`0.5.2-alpha.3`；npm 包名：`dsh-stcardwriter`，目前尚未发布到 npm。
 
-面向 DeepSeek Harness `0.1.2-alpha.3`，提供“酒馆创作模式”Agent 预设和三栏工作台：左侧连接 Harness 并管理项目，中间编辑资源，右侧整栏编辑世界书注入内容并可切换实时预览。内置本地 SillyTavern 连接器；提示词与伪装消息注入由直接依赖的 [DSH Preset Plus](https://github.com/Rain-kl/dsh-preset-plus) 统一提供。
+面向 DeepSeek Harness `0.1.2-alpha.5`，提供“酒馆创作模式”Agent 预设和三栏工作台：左侧连接 Harness 并管理项目，中间编辑资源，右侧整栏编辑世界书注入内容并可切换实时预览。内置本地 SillyTavern 连接器；提示词与伪装消息注入由直接依赖的 [DSH Preset Plus](https://github.com/Rain-kl/dsh-preset-plus) 统一提供。
 
-当前本机运行验证基线为 DSH `0.1.2-alpha.3`，插件已通过 `dsh plugin --profile web add` 安装到本机 DSH 并通过供应链锁校验；兼容检查同样针对官方 `dsh-v0.1.2-alpha.3` 源码完成。插件不再直接声明 0.1.2 已删除的 `@deepseek-ai/dsh-client-runtime`，UI 使用新版仍保留的三个插槽；托管 Agent 组合 v4 同时覆盖 0.1.1 与 0.1.2 的标准工具行。可用 `npm run check:dsh-compat -- <DSH 源码目录>` 复查。
+当前本机运行验证基线为 DSH `0.1.2-alpha.5`：格式检查/修复工具已通过该版本真实 ToolRuntime 的调用与 lossless JSON 校验；静态兼容检查同样针对官方 `dsh-v0.1.2-alpha.5` 源码完成。本次验证未安装或升级 DSH。插件不再直接声明 0.1.2 已删除的 `@deepseek-ai/dsh-client-runtime`，UI 使用新版仍保留的三个插槽；托管 Agent 组合 v4 同时覆盖 0.1.1 与 0.1.2 的标准工具行。可用 `npm run check:dsh-compat -- <DSH 源码目录>` 复查。
 
 ## 快速安装
 
@@ -25,6 +25,17 @@ dsh --profile web
 2. 新建会话并选择「酒馆创作模式」。当前激活的 Preset Plus 预设会与完整 `tavern_*` 工具同时生效。
 3. 从侧栏或会话输入栏打开「酒馆创作」，可以新建空项目，也可以批量导入 `.json`、`.png`、`.charx`、`.zip`。
 4. 如需连接本机 SillyTavern，在左侧连接器填写安装根目录或 `data/<用户>` 目录。
+5. 在酒馆工作台顶部的「工具模式」下拉框切换当前对话的「标准模式／极简模式」。无需新建对话，也无需让 Agent 调用工具。
+
+### 当前对话的标准／极简模式
+
+默认使用标准模式，保留完整 DSH 通用工具与酒馆工具。极简模式只向当前对话保留 `tavern_*` 酒馆资源工具、`ask_user_question` 与 `exit_plan_mode`（若可用），隐藏 Shell、通用文件操作、Web、子 Agent 等工具，减少工具定义占用的上下文。已有的安全策略和其他插件限制仍然生效，切回标准不会解除它们。
+
+这不是更换 DSH Agent 预设：同一个 `tavern-authoring` 对话、聊天记录、项目资源和 Preset Plus 注入保持不变，也不会清空系统提示词或上下文。模式仅由人类在酒馆界面选择，插件不注册 Agent 模式切换工具。运行中的回复不能中途切换；等待当前回复结束后操作，从下一次请求生效，已有后台任务不会被取消。
+
+选择按会话 ID 保存到 `$DSH_HOME/st-card-writer/session-modes/`，重新打开对话或重启宿主后恢复；文件名为会话 ID 的 SHA-256，不直接使用 ID 作为路径。新对话默认标准模式，不会跟随其他对话变化。没有加载对话，或当前对话不是酒馆创作预设时，控件会提示原因。空项目也可以切换。
+
+人类界面接口：`GET /api/dsh-stcardwriter/sessions/<会话 ID>/mode` 查询，`PUT` 同一路径并传入 `{ "mode": "standard" }` 或 `{ "mode": "minimal" }` 切换。这是工具目录精简功能，不是权限隔离或沙箱边界。
 
 ## 功能
 
@@ -39,7 +50,7 @@ dsh --profile web
 - Agent 可用 `tavern_character_patch` 修改指定角色字段而不重传整卡；随卡世界书和独立世界书均支持分页、单条读取、增改、删除。
 - `tavern_worldbook_entries_copy` 可在两张角色卡的内嵌世界书之间，或角色卡与独立世界书之间复制选定条目；ID 冲突可安全重编号、覆盖或跳过。
 - `tavern_preset_convert_to_preset_plus` 只负责把 Chat Completion、System Prompt 或 Context 酒馆预设转换成项目内的 `preset-plus-preset` 草稿；可在中栏修改条目，并在右栏预览实际注入顺序。确认后再用 `tavern_preset_plus_write` 独立写入 Preset Plus，支持冲突改名/覆盖和写入后激活。动态 marker 会跳过并报告，不会伪造成静态提示词。
-- 酒馆创作预设包含 DSH `0.1.2-alpha.3` 标准模式的文件、搜索、Shell、后台任务、技能、目标、计划、压缩、子 Agent、工作流、提问、Todo 与 Web 工具，并在其上追加 `tavern_*` 工具。
+- 酒馆创作预设包含 DSH `0.1.2-alpha.5` 标准模式的文件、搜索、Shell、后台任务、技能、目标、计划、压缩、子 Agent、工作流、提问、Todo 与 Web 工具，并在其上追加 `tavern_*` 工具。
 - 导出角色卡 PNG、V3 JSON、V2 JSON、V1 JSON 或 CHARX；保留导入 PNG 的原图并重写元数据。
 - 酒馆连接器：填入本机酒馆安装根目录或用户数据目录，即可在工作台里浏览并勾选导入酒馆侧角色卡、世界书和五类预设；单张资源或整个项目可一键写回酒馆对应目录。
 - Agent 可用 `tavern_connect_*` / `tavern_remote_*` 工具完成同样的连接、列举、导入与导出。
@@ -50,6 +61,26 @@ dsh --profile web
 - 原始 JSON 是持久化真源；结构化编辑不会主动删除未知字段或 `extensions`。
 - 首次启动插件时，如目标不存在，自动安装 `$DSH_HOME/.agent-presets/tavern-authoring`；不会覆盖用户已修改的同名预设。
 
+## 角色卡与世界书格式检查
+
+酒馆独立世界书与随卡世界书表示同一种内容，但 JSON 结构不同，编辑和复制时会按目标转换（依据 [CCv2](https://github.com/malfoyslastname/character-card-spec-v2/blob/main/spec_v2.md)、[CCv3](https://github.com/kwaroran/character-card-spec-v3/blob/main/SPEC_V3.md) 和 [SillyTavern 导入实现](https://github.com/SillyTavern/SillyTavern/blob/release/public/scripts/world-info.js)）。
+
+| 项目 | 独立世界书 | 角色卡 `data.character_book` |
+| --- | --- | --- |
+| 条目容器 / ID | `entries` 对象 / `uid` | `entries` 数组 / `id` |
+| 关键词 | `key`、`keysecondary` | `keys`、`secondary_keys` |
+| 启用 / 顺序 | `disable`（反向）、`order` | `enabled`、`insertion_order` |
+| 插入位置 | 数值 `position` | `before_char` / `after_char`，高级数值位置在 `extensions.position` |
+| 深度、概率等 | `depth`、`probability` 等 | 条目的 `extensions` 内 |
+
+- `tavern_asset_validate(projectId, assetId)`：只读检查角色卡或世界书。返回 JSON Pointer 问题路径、错误/警告数量及安全修复路径，不返回正文或附件 Base64；支持 `offset` / `limit` 分页，默认 50、最多 100 项。此工具不校验预设。
+- `tavern_asset_repair(projectId, assetId)`：默认 `dryRun=true`，仅预览修复前后的报告。明确传入 `dryRun=false` 才保存；若仍有无法安全修复的问题，整次修复不保存。缺失默认值、明确类型转换、条目容器/字段映射和旧版卡面镜像可以自动修复；损坏正文、重复 ID、无效附件描述等必须先用编辑工具处理。
+- Agent 新增/复制条目自动补齐目标结构；随卡世界书的中栏与右栏编辑均写回数组和 CC 字段，不再写成独立世界书对象。原有标题、未知扩展和附属文件保留。
+- 所有角色卡/世界书导出入口（包括项目 ZIP 和酒馆连接器）先在副本上做安全规范化，遇到未解决的格式错误会阻止该资源导出并给出路径；不会为了生成文件而清空错误正文。导出规范化不会改写工作区源资源，需持久化时使用修复工具。
+- `valid` 仅表示已检查的关键导入结构没有错误，不是完整 SillyTavern 运行保证。酒馆示例中省略的 V3 `group_only_greetings` 和书级 `extensions` 仅提示警告，导出时补齐；不执行卡内脚本、不测试所有第三方扩展或远程附件可用性。独立 JSON 不打包附件，保留嵌入文件请使用 PNG/CHARX。
+
+推荐工作流：按需读取 → 编辑 → `tavern_asset_validate` → `tavern_asset_repair` 预览 → 确认保存 → 导出。
+
 ## 本地包安装与开发
 
 从源码构建 tarball 后安装：
@@ -58,7 +89,7 @@ dsh --profile web
 npm install
 npm test
 npm pack
-dsh plugin --profile web add .\dsh-stcardwriter-0.5.2-alpha.2.tgz
+dsh plugin --profile web add .\dsh-stcardwriter-0.5.2-alpha.3.tgz
 ```
 
 开发期也可以直接链接当前目录：
@@ -90,7 +121,7 @@ dsh plugin --profile web add .
 - 预设的创建、导入、导出、启用和激活统一在 DSH 设置页的「预设增强」中管理；本插件不再注册第二套 system prompt section，因此不存在双注入或两个 `complete` 段冲突。
 - 不要在同一个 profile 中再次单独安装 `@rain-kl/dsh-preset-plus`；它已经由本插件作为直接依赖加载。
 
-Preset Plus 0.1.5 的客户端清单仍带有旧 `dsh-client-runtime` 包边，但其浏览器插件实际只注入 `slots` 服务并通过 `slots.inject("settings.section", ...)` 注册界面；在 DSH `0.1.2-alpha.3` 中包边只用于信息展示，不决定激活顺序，因此该旧清单项不会阻塞加载。兼容检查脚本会同时验证这一点。
+Preset Plus 0.1.5 的客户端清单仍带有旧 `dsh-client-runtime` 包边，但其浏览器插件实际只注入 `slots` 服务并通过 `slots.inject("settings.section", ...)` 注册界面；在 DSH `0.1.2-alpha.5` 中包边只用于信息展示，不决定激活顺序，因此该旧清单项不会阻塞加载。兼容检查脚本会同时验证这一点。
 
 从旧版升级时，插件只会将内容与曾发布版本**精确一致**的 managed v2/v3 组合迁移为 v4；迁移补齐目标命令、子 Agent 模型选择设置和 Web fetch。只要旧预设有任何用户修改，插件就不会覆盖。
 

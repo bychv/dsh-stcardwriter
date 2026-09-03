@@ -13,6 +13,8 @@ import { ProjectStore, resolveWorkspaceDataRoot } from './store.js'
 import { convertTavernPresetToPresetPlus, installPresetPlusPreset, presetPlusPresetFromAsset } from './preset-plus.js'
 import type { AssetKind, JsonObject, TavernAsset, TavernProject } from './types.js'
 import type { EntryConflictPolicy } from './format.js'
+import { checkAssetFormat, normalizeAssetFormat } from './resource-format.js'
+import type { FormatReport } from './resource-format.js'
 
 interface ToolContext { tools: { register(definition: unknown): () => void } }
 export const inject = ['tools']
@@ -68,7 +70,62 @@ function storeFor(workspacePath?: string): ProjectStore {
 
 const workspaceParameter = { type: 'string', description: 'DSH 当前工作区绝对路径；酒馆面板发出的任务会自动附带' } as const
 
+function formatReportForAgent(report: FormatReport, offset = 0, limit = 50): JsonObject {
+  const start = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0
+  const size = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 50
+  return toolResult({ ...report, issues: report.issues.slice(start, start + size), changes: report.changes.slice(start, start + size),
+    issueCount: report.issues.length, changeCount: report.changes.length, offset: start, limit: size,
+    hasMore: start + size < Math.max(report.issues.length, report.changes.length) })
+}
+
 export function apply(ctx: ToolContext): void {
+  ctx.tools.register(defineTool({
+    name: 'tavern_asset_validate',
+    description: '只读检查角色卡 V1/V2/V3、随卡世界书与独立世界书的字段类型、条目容器/ID、关键词、插入位置、附件描述及旧版镜像。创作完成或导出前调用；只返回问题路径和修复摘要，不返回正文或二进制。valid 表示导入关键结构无错误，不代表所有酒馆扩展都已验证。',
+    parameters: {
+      projectId: { type: 'string', required: true }, assetId: { type: 'string', required: true },
+      offset: { type: 'number', description: '问题/变更摘要起始下标，默认 0' },
+      limit: { type: 'number', description: '返回问题/变更数，默认 50，上限 100' }, workspacePath: workspaceParameter,
+    }, output, isConcurrencySafe: () => true,
+    async execute(args: { projectId: string; assetId: string; offset?: number; limit?: number; workspacePath?: string }) {
+      const asset = findAsset(await storeFor(args.workspacePath).get(args.projectId), args.assetId)
+      return toolResult({ assetId: asset.id, kind: asset.kind, report: formatReportForAgent(checkAssetFormat(asset), args.offset, args.limit) })
+    },
+  }))
+  ctx.tools.register(defineTool({
+    name: 'tavern_asset_repair',
+    description: '安全修复角色卡/世界书格式：补默认值、明确类型转换、entries 对象/数组与字段映射、同步旧版镜像。默认 dryRun=true 仅预览；确认后 dryRun=false 保存。保留未知扩展和附件；正文/附件类型错误、重复 ID 等不能安全判断时拒绝保存全部改动，先用现有编辑工具修正再检查。结果仅含路径，不输出资源全文。',
+    parameters: {
+      projectId: { type: 'string', required: true }, assetId: { type: 'string', required: true },
+      dryRun: { type: 'boolean', description: '默认 true；false 才保存通过校验的修复结果' },
+      offset: { type: 'number' }, limit: { type: 'number', description: '默认 50，上限 100' }, workspacePath: workspaceParameter,
+    }, output,
+    isConcurrencySafe: (args: { dryRun?: boolean }) => args.dryRun !== false,
+    async execute(args: { projectId: string; assetId: string; dryRun?: boolean; offset?: number; limit?: number; workspacePath?: string }) {
+      const store = storeFor(args.workspacePath)
+      const plan = (asset: TavernAsset) => {
+        const normalized = normalizeAssetFormat(asset)
+        const after = checkAssetFormat({ ...asset, data: normalized.data })
+        return { ...normalized, after, canSave: normalized.report.repairable && after.valid }
+      }
+      let result = plan(findAsset(await store.get(args.projectId), args.assetId))
+      let saved = false
+      if (args.dryRun === false && result.canSave && result.report.changes.length) {
+        await store.update(args.projectId, project => {
+          const asset = findAsset(project, args.assetId)
+          result = plan(asset) // Recheck inside the store lock; never save a stale preview.
+          if (!result.canSave) throw new Error('资源已变化且无法安全修复，请重新检查格式')
+          asset.data = result.data
+          asset.updatedAt = new Date().toISOString()
+          saved = true
+        })
+      }
+      return toolResult({ assetId: args.assetId, dryRun: args.dryRun !== false, saved, canSave: result.canSave,
+        before: formatReportForAgent(result.report, args.offset, args.limit), after: formatReportForAgent(result.after, args.offset, args.limit),
+        next: !result.canSave ? '不能安全自动修复，未保存。按问题路径使用 tavern_character_patch、tavern_worldbook_entry_upsert 或 tavern_asset_save 修正后重新检查。'
+          : saved ? '已保存安全修复；可按需读取字段或导出。' : args.dryRun === false ? '格式已符合要求，无需保存。' : '这是预览；使用 dryRun=false 保存，或继续编辑后重新检查。' })
+    },
+  }))
   ctx.tools.register(defineTool({
     name: 'tavern_project_list',
     description: '列出酒馆创作模式中的项目及角色卡、世界书、预设数量。',
@@ -137,7 +194,7 @@ export function apply(ctx: ToolContext): void {
   }))
   ctx.tools.register(defineTool({
     name: 'tavern_asset_save',
-    description: '保存角色卡、世界书或预设的完整原生 JSON；未知字段会保留。',
+    description: '保存角色卡、世界书或预设的完整原生 JSON；需携带原有未知字段。完成创作后用 tavern_asset_validate 检查格式，再用 tavern_asset_repair 预览并修复安全默认值。',
     parameters: {
       projectId: { type: 'string', required: true },
       assetId: { type: 'string', required: true },
@@ -223,7 +280,7 @@ export function apply(ctx: ToolContext): void {
   }))
   ctx.tools.register(defineTool({
     name: 'tavern_worldbook_entry_upsert',
-    description: '在独立世界书或角色卡内嵌世界书中新增或覆盖一个原生条目，保持其余条目和未知字段不变。',
+    description: '在独立世界书或角色卡内嵌世界书中新增或覆盖一个原生条目，自动按目标转换字段并补默认值：独立书 uid/key/order/disable；卡内 id/keys/insertion_order/enabled 和 extensions。其余条目不变；覆盖时携带需保留的原条目扩展。',
     parameters: {
       projectId: { type: 'string', required: true },
       assetId: { type: 'string', required: true, description: '独立世界书或角色卡 ID' },

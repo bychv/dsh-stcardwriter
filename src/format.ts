@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { strFromU8, unzipSync, zipSync } from 'fflate'
 import { makePlaceholderPng, readCharacterFromPng, readExtendedAssetsFromPng, writeCharacterToPng } from './png.js'
 import type { AttachedResource, AssetFormat, AssetKind, ExportedFile, JsonObject, JsonValue, TavernAsset, TavernProject } from './types.js'
+import { convertWorldbook, convertWorldbookEntry, repairedAssetData } from './resource-format.js'
 
 const REQUIRED_CHARACTER_FIELDS = ['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example'] as const
 
@@ -89,20 +90,22 @@ function completeCharacterData(source: JsonObject): JsonObject {
 }
 
 export function toCharacterV2(card: JsonObject): JsonObject {
+  const normalized = repairedAssetData({ kind: 'character', data: card })
   return {
-    ...clone(card),
+    ...normalized,
     spec: 'chara_card_v2',
     spec_version: '2.0',
-    data: completeCharacterData(characterData(card)),
+    data: completeCharacterData(characterData(normalized)),
   }
 }
 
 export function toCharacterV3(card: JsonObject): JsonObject {
+  const normalized = repairedAssetData({ kind: 'character', data: card })
   return {
-    ...clone(card),
+    ...normalized,
     spec: 'chara_card_v3',
     spec_version: '3.0',
-    data: completeCharacterData(characterData(card)),
+    data: completeCharacterData(characterData(normalized)),
   }
 }
 
@@ -287,6 +290,7 @@ function convertEmbeddedUris(card: JsonObject, container: 'png' | 'charx'): Json
 }
 
 export function exportAsset(asset: TavernAsset, requested?: string): ExportedFile {
+  if (asset.kind !== 'preset') asset = { ...asset, data: repairedAssetData(asset) }
   const stem = safeExportName(asset.name)
   if (asset.kind === 'character') {
     if (requested === 'v1') return jsonFile(`${stem}.v1.json`, toCharacterV1(asset.data))
@@ -466,14 +470,17 @@ export function worldbookEntryRecords(asset: TavernAsset): { id: string; entry: 
 
 function mutableWorldbook(asset: TavernAsset): JsonObject {
   if (asset.kind === 'worldbook') {
-    if (!isObject(asset.data.entries) && !Array.isArray(asset.data.entries)) asset.data.entries = {}
+    if (asset.data.entries === undefined) asset.data.entries = {}
+    if (!isObject(asset.data.entries) && !Array.isArray(asset.data.entries)) throw new Error('entries 格式错误，请先检查修复')
     return asset.data
   }
   if (asset.kind !== 'character') throw new Error('所选资源不是角色卡或世界书')
   const data = characterData(asset.data)
-  if (!isObject(data.character_book)) data.character_book = { name: `${asset.name} 世界书`, entries: [] }
+  if (data.character_book === undefined) data.character_book = { name: `${asset.name} 世界书`, extensions: {}, entries: [] }
+  if (!isObject(data.character_book)) throw new Error('character_book 格式错误，请先检查修复')
   const book = data.character_book as JsonObject
-  if (!isObject(book.entries) && !Array.isArray(book.entries)) book.entries = []
+  if (book.entries === undefined) book.entries = []
+  if (!isObject(book.entries) && !Array.isArray(book.entries)) throw new Error('entries 格式错误，请先检查修复')
   return book
 }
 
@@ -482,27 +489,24 @@ function nextEntryId(records: { id: string }[]): string {
   return String((numeric.length ? Math.max(...numeric) : -1) + 1)
 }
 
-function setEntryIdentity(entry: JsonObject, id: string, arrayContainer: boolean): void {
-  const numeric = Number(id)
-  const value: JsonValue = Number.isSafeInteger(numeric) && String(numeric) === id ? numeric : id
-  if ('uid' in entry) entry.uid = value
-  if (arrayContainer && ('id' in entry || !('uid' in entry))) entry.id = value
-}
-
-export function upsertWorldbookEntry(asset: TavernAsset, requestedId: string | undefined, input: JsonObject): { entryId: string; created: boolean } {
-  const book = mutableWorldbook(asset)
-  const records = worldbookEntryRecords(asset)
+export function upsertWorldbookEntry(asset: TavernAsset, requestedId: string | undefined, input: JsonObject, sourceDialect?: 'character' | 'worldbook'): { entryId: string; created: boolean } {
+  const candidate = clone(asset)
+  const book = mutableWorldbook(candidate)
+  const records = worldbookEntryRecords(candidate)
   const entryId = requestedId || nextEntryId(records)
   const existing = records.find(value => value.id === entryId)
-  const entry = clone(input)
+  const entry = convertWorldbookEntry(input, asset.kind === 'character' ? 'character' : 'worldbook', entryId, sourceDialect)
   if (Array.isArray(book.entries)) {
-    setEntryIdentity(entry, entryId, true)
     if (existing?.index !== undefined) book.entries[existing.index] = entry
     else book.entries.push(entry)
   } else {
-    setEntryIdentity(entry, entryId, false)
     ;(book.entries as JsonObject)[entryId] = entry
   }
+  // Validate after replacing the selected entry, so an invalid old entry can
+  // itself be fixed with this tool. Publish only the successful candidate.
+  if (candidate.kind === 'character') characterData(candidate.data).character_book = convertWorldbook(book, 'character')
+  else candidate.data = convertWorldbook(book, 'worldbook')
+  asset.data = candidate.data
   asset.updatedAt = new Date().toISOString()
   return { entryId, created: !existing }
 }
@@ -544,7 +548,7 @@ export function copyWorldbookEntries(
       continue
     }
     const targetId = exists && conflict === 'renumber' ? undefined : sourceRecord.id
-    const result = upsertWorldbookEntry(target, targetId, sourceRecord.entry)
+    const result = upsertWorldbookEntry(target, targetId, sourceRecord.entry, source.kind === 'character' ? 'character' : 'worldbook')
     if (exists && conflict === 'overwrite') overwritten += 1
     else copied += 1
     mappings.push({ sourceId: sourceRecord.id, targetId: result.entryId, status: exists && conflict === 'overwrite' ? 'overwritten' : 'copied' })
